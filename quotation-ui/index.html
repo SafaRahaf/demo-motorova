@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NerveCenter — Quotation, Negotiation &amp; Payments (UI Prototype)</title>
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand__mark">NC</div>
+      <div>
+        <div class="brand__name">NerveCenter</div>
+        <div class="brand__sub">Quotation &middot; Negotiation &middot; Payments</div>
+      </div>
+    </div>
+
+    <div class="topbar__right">
+      <span class="topbar__label">Viewing as</span>
+      <div class="segmented" id="roleSwitch">
+        <button type="button" data-act="role" data-role="customer">Customer</button>
+        <button type="button" data-act="role" data-role="garage">Garage</button>
+      </div>
+      <button type="button" class="btn btn--ghost btn--sm" data-act="reset">Reset demo</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="main" id="main"></main>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+  <div class="modal" id="modal" hidden></div>
+
+  <script src="js/store.js"></script>
+  <script src="js/views.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
