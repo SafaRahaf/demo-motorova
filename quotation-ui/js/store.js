@@ -7,10 +7,10 @@
    so changing a rate tomorrow cannot rewrite yesterday's bill.
    ========================================================= */
 (function (global) {
-  'use strict';
+  "use strict";
 
   /* ---------------- utils ---------------- */
-  const uid = (p) => p + '_' + Math.random().toString(36).slice(2, 9);
+  const uid = (p) => p + "_" + Math.random().toString(36).slice(2, 9);
   const nowISO = () => new Date().toISOString();
   const addDays = (iso, n) => {
     const d = new Date(iso);
@@ -18,37 +18,74 @@
     return d.toISOString();
   };
   const money = (cents) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format((cents || 0) / 100);
+    new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+    }).format((cents || 0) / 100);
   const fmtDateTime = (iso) =>
     iso
-      ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-      : '—';
+      ? new Date(iso).toLocaleString("en-US", {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : "—";
   const fmtDay = (iso) =>
-    iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+    iso
+      ? new Date(iso).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })
+      : "—";
 
-  const refresh = () => { if (global.App && global.App.render) global.App.render(); };
-  const toast = (msg, kind) => { if (global.App && global.App.toast) global.App.toast(msg, kind); };
+  const refresh = () => {
+    if (global.App && global.App.render) global.App.render();
+  };
+  const toast = (msg, kind) => {
+    if (global.App && global.App.toast) global.App.toast(msg, kind);
+  };
 
   /* ---------------- state ---------------- */
   const S = {
-    role: 'garage',
-    screen: 'job',            // 'job' | 'taxes' | 'services'
-    jobId: 'job_1',
-    tab: 'overview',
+    role: "garage",
+    screen: "job", // 'job' | 'taxes' | 'services' | 'builder'
+    jobId: "job_1",
+    tab: "overview",
     editingQuoteId: null,
+    builderQuoteId: null,
+    builderSearch: "",
+    builderCat: "all",
     settings: {
-      depositType: 'PERCENT',
+      depositType: "PERCENT",
       depositValue: 30,
       storageDailyRate: 3500,
       storageGraceDays: 3,
+      reissueInvoiceOnPayment: true,
     },
     taxes: [],
     services: [],
-    jobs: [], quotes: [], invoices: [], payments: [], receipts: [],
-    refunds: [], creditNotes: [], cancellations: [], storage: [], timeline: [],
+    jobs: [],
+    quotes: [],
+    invoices: [],
+    payments: [],
+    receipts: [],
+    refunds: [],
+    creditNotes: [],
+    cancellations: [],
+    storage: [],
+    timeline: [],
   };
 
-  let counters = { inv: 5001, pro: 8001, pay: 9001, rec: 7001, ref: 3001, cn: 101 };
+  let counters = {
+    inv: 5001,
+    pro: 8001,
+    pay: 9001,
+    rec: 7001,
+    ref: 3001,
+    cn: 101,
+  };
 
   /* =========================================================
      SELECTORS
@@ -63,30 +100,71 @@
     service: (id) => S.services.find((s) => s.id === id),
 
     quotesForJob: (jobId) =>
-      S.quotes.filter((q) => q.jobId === jobId).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)),
+      S.quotes
+        .filter((q) => q.jobId === jobId)
+        .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)),
     activeQuote: (jobId) =>
-      sel.quotesForJob(jobId)
-        .filter((q) => ['DRAFT', 'PENDING_GARAGE_APPROVAL', 'PENDING_CUSTOMER_APPROVAL'].includes(q.status))
+      sel
+        .quotesForJob(jobId)
+        .filter((q) =>
+          [
+            "DRAFT",
+            "PENDING_GARAGE_APPROVAL",
+            "PENDING_CUSTOMER_APPROVAL",
+          ].includes(q.status),
+        )
         .pop(),
-    stdQuote: (jobId) => sel.quotesForJob(jobId).find((q) => q.type === 'STANDARD' && q.status === 'ACCEPTED'),
+    stdQuote: (jobId) =>
+      sel
+        .quotesForJob(jobId)
+        .find((q) => q.type === "STANDARD" && q.status === "ACCEPTED"),
 
     invoicesForJob: (jobId) => S.invoices.filter((i) => i.jobId === jobId),
-    stdInvoice: (jobId) => S.invoices.find((i) => i.jobId === jobId && i.kind === 'TAX_INVOICE'),
+    stdInvoice: (jobId) =>
+      S.invoices.find(
+        (i) =>
+          i.jobId === jobId && i.kind === "TAX_INVOICE" && i.status !== "VOID",
+      ),
+    voidedInvoices: (jobId) =>
+      S.invoices.filter(
+        (i) =>
+          i.jobId === jobId && i.kind === "TAX_INVOICE" && i.status === "VOID",
+      ),
+    invoiceVersions: (jobId) =>
+      S.invoices
+        .filter((i) => i.jobId === jobId && i.kind === "TAX_INVOICE")
+        .sort((a, b) => (a.seq || 1) - (b.seq || 1)),
+    receiptsForJob: (jobId) => S.receipts.filter((r) => r.jobId === jobId),
+    receiptForInvoice: (invId) => S.receipts.find((r) => r.invoiceId === invId),
     openProforma: (jobId) =>
-      S.invoices.filter((i) => i.jobId === jobId && i.kind === 'PROFORMA' && i.status === 'ISSUED').pop(),
+      S.invoices
+        .filter(
+          (i) =>
+            i.jobId === jobId && i.kind === "PROFORMA" && i.status === "ISSUED",
+        )
+        .pop(),
 
-    paymentsForInvoice: (invId) => S.payments.filter((p) => p.invoiceId === invId),
-    paymentsForJob: (jobId) => S.payments.filter((p) => (sel.invoice(p.invoiceId) || {}).jobId === jobId),
-    refundsForJob: (jobId) => S.refunds.filter((r) => (sel.invoice(r.invoiceId) || {}).jobId === jobId),
-    creditNotesForInvoice: (invId) => S.creditNotes.filter((c) => c.invoiceId === invId),
-    cancellationsForJob: (jobId) => S.cancellations.filter((c) => c.jobId === jobId),
+    paymentsForInvoice: (invId) =>
+      S.payments.filter((p) => p.invoiceId === invId),
+    paymentsForJob: (jobId) =>
+      S.payments.filter(
+        (p) => (sel.invoice(p.invoiceId) || {}).jobId === jobId,
+      ),
+    refundsForJob: (jobId) =>
+      S.refunds.filter((r) => (sel.invoice(r.invoiceId) || {}).jobId === jobId),
+    creditNotesForInvoice: (invId) =>
+      S.creditNotes.filter((c) => c.invoiceId === invId),
+    cancellationsForJob: (jobId) =>
+      S.cancellations.filter((c) => c.jobId === jobId),
     openCancellation: (jobId) =>
       S.cancellations
         .filter((c) => c.jobId === jobId)
-        .find((c) => !['AGREED', 'DECLINED', 'WITHDRAWN'].includes(c.status)),
+        .find((c) => !["AGREED", "DECLINED", "WITHDRAWN"].includes(c.status)),
     storageForJob: (jobId) => S.storage.filter((s) => s.jobId === jobId),
     timelineForJob: (jobId) =>
-      S.timeline.filter((t) => t.jobId === jobId).sort((a, b) => new Date(a.at) - new Date(b.at)),
+      S.timeline
+        .filter((t) => t.jobId === jobId)
+        .sort((a, b) => new Date(a.at) - new Date(b.at)),
   };
 
   /* =========================================================
@@ -100,7 +178,8 @@
   const activeTaxes = () => S.taxes.filter((t) => t.active);
   const taxById = (id) => S.taxes.find((t) => t.id === id);
   const taxByCode = (code) =>
-    S.taxes.find((t) => t.code === code && t.active) || S.taxes.find((t) => t.code === code);
+    S.taxes.find((t) => t.code === code && t.active) ||
+    S.taxes.find((t) => t.code === code);
 
   const defaultTaxFor = (kind) => {
     const list = activeTaxes();
@@ -108,10 +187,12 @@
   };
 
   const taxRateLabel = (t) => {
-    if (!t) return 'No tax';
-    return t.kind === 'PERCENT' ? `${(t.value / 100).toFixed(2)}%` : `${money(t.value)} / unit`;
+    if (!t) return "No tax";
+    return t.kind === "PERCENT"
+      ? `${(t.value / 100).toFixed(2)}%`
+      : `${money(t.value)} / unit`;
   };
-  const taxLabel = (t) => (t ? `${t.code} · ${taxRateLabel(t)}` : 'No tax');
+  const taxLabel = (t) => (t ? `${t.code} · ${taxRateLabel(t)}` : "No tax");
 
   /* Copy the tax definition onto the line (the snapshot). */
   function setLineTax(line, tax) {
@@ -129,7 +210,7 @@
     const gross = Math.round((line.qty || 0) * (line.unitPrice || 0));
     if (!line.taxId) return { gross, net: gross, tax: 0 };
 
-    if (line.taxKind === 'PERCENT') {
+    if (line.taxKind === "PERCENT") {
       const rate = (line.taxValue || 0) / 10000;
       if (line.taxInclusive) {
         const net = Math.round(gross / (1 + rate)); // tax is already inside the price
@@ -138,7 +219,11 @@
       return { gross, net: gross, tax: Math.round(gross * rate) };
     }
     // FIXED: charged per unit, added on top
-    return { gross, net: gross, tax: Math.round((line.taxValue || 0) * (line.qty || 0)) };
+    return {
+      gross,
+      net: gross,
+      tax: Math.round((line.taxValue || 0) * (line.qty || 0)),
+    };
   }
 
   /* One function used by BOTH quotes and invoices. */
@@ -154,9 +239,14 @@
       if (line.taxId) {
         if (!map.has(line.taxId)) {
           map.set(line.taxId, {
-            id: line.taxId, code: line.taxCode, name: line.taxName,
-            kind: line.taxKind, value: line.taxValue, inclusive: line.taxInclusive,
-            base: 0, amount: 0,
+            id: line.taxId,
+            code: line.taxCode,
+            name: line.taxName,
+            kind: line.taxKind,
+            value: line.taxValue,
+            inclusive: line.taxInclusive,
+            base: 0,
+            amount: 0,
           });
         }
         const e = map.get(line.taxId);
@@ -165,22 +255,51 @@
       }
     });
 
-    return { subtotal, taxTotal, total: subtotal + taxTotal, taxes: [...map.values()] };
+    return {
+      subtotal,
+      taxTotal,
+      total: subtotal + taxTotal,
+      taxes: [...map.values()],
+    };
   }
 
   const quoteTotals = (q) => docTotals(q.items);
-  const lineTotal = (line) => Math.round((line.qty || 0) * (line.unitPrice || 0));
+  const lineTotal = (line) =>
+    Math.round((line.qty || 0) * (line.unitPrice || 0));
 
   function depositFor(q) {
     const total = quoteTotals(q).total;
-    if (q.depositType === 'PERCENT') return Math.round((total * (q.depositValue || 0)) / 100);
-    if (q.depositType === 'FLAT') return Math.round((q.depositValue || 0) * 100);
+    if (q.depositType === "PERCENT")
+      return Math.round((total * (q.depositValue || 0)) / 100);
+    if (q.depositType === "FLAT")
+      return Math.round((q.depositValue || 0) * 100);
     return 0;
   }
 
   /* =========================================================
      INVOICE MATH
      ========================================================= */
+  /* Money received for a whole job, across every invoice version. */
+  const jobPaid = (jobId) =>
+    S.payments
+      .filter((p) => {
+        const i = sel.invoice(p.invoiceId);
+        return (
+          i &&
+          i.jobId === jobId &&
+          ["SUCCEEDED", "PARTIALLY_REFUNDED", "REFUNDED"].includes(p.status)
+        );
+      })
+      .reduce((s, p) => s + p.amount, 0);
+
+  const jobRefunded = (jobId) =>
+    S.refunds
+      .filter((r) => {
+        const i = sel.invoice(r.invoiceId);
+        return i && i.jobId === jobId && r.status === "COMPLETED";
+      })
+      .reduce((s, r) => s + r.amount, 0);
+
   function syncInvoice(inv) {
     const t = docTotals(inv.lines);
     inv.subtotal = t.subtotal;
@@ -188,33 +307,43 @@
     inv.taxes = t.taxes;
     inv.total = t.total;
 
-    if (inv.kind === 'PROFORMA') {
+    if (inv.kind === "PROFORMA") {
       inv.amountPaid = 0;
       inv.refunded = 0;
-      inv.balance = 0;               // a proforma never chases money
+      inv.balance = 0; // a proforma never chases money
       inv.vehicleHold = false;
-      if (!['SUPERSEDED', 'VOID'].includes(inv.status)) inv.status = 'ISSUED';
+      if (!["SUPERSEDED", "VOID"].includes(inv.status)) inv.status = "ISSUED";
       return inv;
     }
 
-    const paid = S.payments
-      .filter((p) => p.invoiceId === inv.id && ['SUCCEEDED', 'PARTIALLY_REFUNDED', 'REFUNDED'].includes(p.status))
-      .reduce((s, p) => s + p.amount, 0);
-    const refunded = S.refunds
-      .filter((r) => r.invoiceId === inv.id && r.status === 'COMPLETED')
-      .reduce((s, r) => s + r.amount, 0);
+    /* A voided version is frozen: it keeps the figures it had when replaced. */
+    if (inv.status === "VOID") return inv;
+
+    /* Warranty rework is always zero-dollar and never carries payments. */
+    if (inv.kind === "WARRANTY") {
+      inv.amountPaid = 0;
+      inv.refunded = 0;
+      inv.balance = 0;
+      inv.status = "PAID";
+      inv.vehicleHold = false;
+      return inv;
+    }
+
+    const paid = jobPaid(inv.jobId);
+    const refunded = jobRefunded(inv.jobId);
     const balance = Math.max(0, inv.total - paid);
 
     inv.amountPaid = paid;
     inv.refunded = refunded;
     inv.balance = balance;
 
-    if (inv.total === 0) inv.status = 'PAID';
-    else if (balance === 0) inv.status = refunded > 0 && refunded >= paid ? 'REFUNDED' : 'PAID';
-    else if (paid > 0) inv.status = 'PARTIALLY_PAID';
-    else inv.status = 'UNPAID';
+    if (inv.total === 0) inv.status = "PAID";
+    else if (balance === 0)
+      inv.status = refunded > 0 && refunded >= paid ? "REFUNDED" : "PAID";
+    else if (paid > 0) inv.status = "PARTIALLY_PAID";
+    else inv.status = "UNPAID";
 
-    inv.vehicleHold = inv.kind === 'TAX_INVOICE' && balance > 0;
+    inv.vehicleHold = inv.kind === "TAX_INVOICE" && balance > 0;
     return inv;
   }
 
@@ -223,7 +352,12 @@
      ========================================================= */
   function log(jobId, quoteId, actor, action, note, before, after) {
     S.timeline.push({
-      id: uid('tl'), jobId, quoteId, actor, action, note,
+      id: uid("tl"),
+      jobId,
+      quoteId,
+      actor,
+      action,
+      note,
       amountBefore: before === undefined ? null : before,
       amountAfter: after === undefined ? null : after,
       at: nowISO(),
@@ -231,27 +365,40 @@
   }
 
   const nextQuoteNo = (job) =>
-    'Q-' + job.jobNo.replace('JC-', '') + '-' + (sel.quotesForJob(job.id).length + 1);
+    "Q-" +
+    job.jobNo.replace("JC-", "") +
+    "-" +
+    (sel.quotesForJob(job.id).length + 1);
 
   /* =========================================================
      LINE BUILDERS
      ========================================================= */
   function linesFromQuote(q, isAddon) {
     return q.items.map((i) => ({
-      id: uid('ln'), quoteId: q.id, quoteType: q.type,
-      description: i.description, qty: i.qty, unitPrice: i.unitPrice,
-      taxId: i.taxId, taxCode: i.taxCode, taxName: i.taxName,
-      taxKind: i.taxKind, taxValue: i.taxValue, taxInclusive: i.taxInclusive,
+      id: uid("ln"),
+      quoteId: q.id,
+      quoteType: q.type,
+      description: i.description,
+      qty: i.qty,
+      unitPrice: i.unitPrice,
+      taxId: i.taxId,
+      taxCode: i.taxCode,
+      taxName: i.taxName,
+      taxKind: i.taxKind,
+      taxValue: i.taxValue,
+      taxInclusive: i.taxInclusive,
       isAddon: !!isAddon,
     }));
   }
 
   /* Every accepted quote on the job, ready to become invoice lines. */
   function buildLines(jobId) {
-    const accepted = sel.quotesForJob(jobId).filter((q) => q.status === 'ACCEPTED' && q.type !== 'WARRANTY');
-    const settlement = accepted.find((q) => q.type === 'SETTLEMENT');
-    const base = settlement || accepted.find((q) => q.type === 'STANDARD');
-    const addons = accepted.filter((q) => q.type === 'SUPPLEMENTARY');
+    const accepted = sel
+      .quotesForJob(jobId)
+      .filter((q) => q.status === "ACCEPTED" && q.type !== "WARRANTY");
+    const settlement = accepted.find((q) => q.type === "SETTLEMENT");
+    const base = settlement || accepted.find((q) => q.type === "STANDARD");
+    const addons = accepted.filter((q) => q.type === "SUPPLEMENTARY");
 
     const lines = [];
     if (base) lines.push(...linesFromQuote(base, false));
@@ -276,192 +423,751 @@
      SEED
      ========================================================= */
   function seed() {
-    S.jobs = []; S.quotes = []; S.invoices = []; S.payments = []; S.receipts = [];
-    S.refunds = []; S.creditNotes = []; S.cancellations = []; S.storage = []; S.timeline = [];
-    counters = { inv: 5004, pro: 8004, pay: 9004, rec: 7004, ref: 3004, cn: 101 };
+    S.jobs = [];
+    S.quotes = [];
+    S.invoices = [];
+    S.payments = [];
+    S.receipts = [];
+    S.refunds = [];
+    S.creditNotes = [];
+    S.cancellations = [];
+    S.storage = [];
+    S.timeline = [];
+    counters = {
+      inv: 5004,
+      pro: 8004,
+      pay: 9004,
+      rec: 7004,
+      ref: 3004,
+      cn: 101,
+    };
 
     const t = nowISO();
-    const FROM = '2024-01-01T00:00:00.000Z';
+    const FROM = "2024-01-01T00:00:00.000Z";
 
     /* ---------- taxes ---------- */
     S.taxes = [
-      { id: 'tax_vat_std', code: 'VAT-STD', name: 'VAT (standard)', kind: 'PERCENT', value: 800,
-        inclusive: false, appliesTo: ['SERVICE', 'FEE'], effectiveFrom: FROM, effectiveTo: null, active: true, supersededBy: null },
-      { id: 'tax_vat_lab', code: 'VAT-LAB', name: 'VAT (labour)', kind: 'PERCENT', value: 800,
-        inclusive: false, appliesTo: ['LABOR'], effectiveFrom: FROM, effectiveTo: null, active: true, supersededBy: null },
-      { id: 'tax_vat_prt', code: 'VAT-PRT', name: 'VAT (parts)', kind: 'PERCENT', value: 500,
-        inclusive: false, appliesTo: ['PART'], effectiveFrom: FROM, effectiveTo: null, active: true, supersededBy: null },
-      { id: 'tax_env_tyr', code: 'ENV-TYR', name: 'Tyre environmental levy', kind: 'FIXED', value: 500,
-        inclusive: false, appliesTo: [], effectiveFrom: '2024-03-01T00:00:00.000Z', effectiveTo: null, active: true, supersededBy: null },
-      { id: 'tax_wst_dis', code: 'WST-DIS', name: 'Waste disposal', kind: 'FIXED', value: 1200,
-        inclusive: false, appliesTo: ['FEE'], effectiveFrom: '2024-06-01T00:00:00.000Z', effectiveTo: null, active: true, supersededBy: null },
-      { id: 'tax_inc_prt', code: 'VAT-PRT-INC', name: 'VAT (parts, tax-inclusive)', kind: 'PERCENT', value: 500,
-        inclusive: true, appliesTo: [], effectiveFrom: FROM, effectiveTo: null, active: true, supersededBy: null },
+      {
+        id: "tax_vat_std",
+        code: "VAT-STD",
+        name: "VAT (standard)",
+        kind: "PERCENT",
+        value: 800,
+        inclusive: false,
+        appliesTo: ["SERVICE", "FEE"],
+        effectiveFrom: FROM,
+        effectiveTo: null,
+        active: true,
+        supersededBy: null,
+      },
+      {
+        id: "tax_vat_lab",
+        code: "VAT-LAB",
+        name: "VAT (labour)",
+        kind: "PERCENT",
+        value: 800,
+        inclusive: false,
+        appliesTo: ["LABOR"],
+        effectiveFrom: FROM,
+        effectiveTo: null,
+        active: true,
+        supersededBy: null,
+      },
+      {
+        id: "tax_vat_prt",
+        code: "VAT-PRT",
+        name: "VAT (parts)",
+        kind: "PERCENT",
+        value: 500,
+        inclusive: false,
+        appliesTo: ["PART"],
+        effectiveFrom: FROM,
+        effectiveTo: null,
+        active: true,
+        supersededBy: null,
+      },
+      {
+        id: "tax_env_tyr",
+        code: "ENV-TYR",
+        name: "Tyre environmental levy",
+        kind: "FIXED",
+        value: 500,
+        inclusive: false,
+        appliesTo: [],
+        effectiveFrom: "2024-03-01T00:00:00.000Z",
+        effectiveTo: null,
+        active: true,
+        supersededBy: null,
+      },
+      {
+        id: "tax_wst_dis",
+        code: "WST-DIS",
+        name: "Waste disposal",
+        kind: "FIXED",
+        value: 1200,
+        inclusive: false,
+        appliesTo: ["FEE"],
+        effectiveFrom: "2024-06-01T00:00:00.000Z",
+        effectiveTo: null,
+        active: true,
+        supersededBy: null,
+      },
+      {
+        id: "tax_inc_prt",
+        code: "VAT-PRT-INC",
+        name: "VAT (parts, tax-inclusive)",
+        kind: "PERCENT",
+        value: 500,
+        inclusive: true,
+        appliesTo: [],
+        effectiveFrom: FROM,
+        effectiveTo: null,
+        active: true,
+        supersededBy: null,
+      },
       /* historical version, kept for the audit trail */
-      { id: 'tax_vat_old', code: 'VAT-STD', name: 'VAT (standard, 2023)', kind: 'PERCENT', value: 750,
-        inclusive: false, appliesTo: ['SERVICE', 'FEE'], effectiveFrom: '2023-01-01T00:00:00.000Z',
-        effectiveTo: '2023-12-31T00:00:00.000Z', active: false, supersededBy: 'tax_vat_std' },
+      {
+        id: "tax_vat_old",
+        code: "VAT-STD",
+        name: "VAT (standard, 2023)",
+        kind: "PERCENT",
+        value: 750,
+        inclusive: false,
+        appliesTo: ["SERVICE", "FEE"],
+        effectiveFrom: "2023-01-01T00:00:00.000Z",
+        effectiveTo: "2023-12-31T00:00:00.000Z",
+        active: false,
+        supersededBy: "tax_vat_std",
+      },
     ];
 
     /* ---------- service catalog ---------- */
     S.services = [
-      { id: 'svc_oil', name: 'Oil & filter change', category: 'Maintenance', price: 9900, taxCode: 'VAT-STD', unit: 'job' },
-      { id: 'svc_brake_pad', name: 'Front brake pads (OEM)', category: 'Brakes', price: 8900, taxCode: 'VAT-PRT', unit: 'set' },
-      { id: 'svc_rotor', name: 'Brake rotors (pair)', category: 'Brakes', price: 14500, taxCode: 'VAT-PRT', unit: 'pair' },
-      { id: 'svc_brake_fluid', name: 'Brake fluid flush', category: 'Brakes', price: 6900, taxCode: 'VAT-STD', unit: 'job' },
-      { id: 'svc_brake_lab', name: 'Brake overhaul labour', category: 'Brakes', price: 9500, taxCode: 'VAT-LAB', unit: 'hour' },
-      { id: 'svc_align', name: 'Four-wheel alignment', category: 'Tyres', price: 7200, taxCode: 'VAT-STD', unit: 'job' },
-      { id: 'svc_tyre', name: 'Tyre replacement', category: 'Tyres', price: 12500, taxCode: 'VAT-PRT', unit: 'tyre' },
-      { id: 'svc_tyre_levy', name: 'Tyre disposal levy', category: 'Tyres', price: 500, taxCode: 'ENV-TYR', unit: 'tyre' },
-      { id: 'svc_ac', name: 'A/C recharge (R-134a)', category: 'Climate', price: 18000, taxCode: 'VAT-STD', unit: 'job' },
-      { id: 'svc_diag', name: 'Diagnostic scan', category: 'Diagnostics', price: 6000, taxCode: 'VAT-STD', unit: 'job' },
-      { id: 'svc_battery', name: 'Battery replacement', category: 'Electrical', price: 15900, taxCode: 'VAT-PRT', unit: 'unit' },
-      { id: 'svc_coolant', name: 'Coolant flush', category: 'Maintenance', price: 8900, taxCode: 'VAT-STD', unit: 'job' },
-      { id: 'svc_cabin', name: 'Cabin air filter', category: 'Filters', price: 5900, taxCode: 'VAT-PRT', unit: 'unit' },
-      { id: 'svc_wiper', name: 'Wiper blades (pair)', category: 'Filters', price: 3200, taxCode: 'VAT-PRT', unit: 'pair' },
-      { id: 'svc_shop', name: 'Shop supplies & disposal', category: 'Fees', price: 2500, taxCode: 'WST-DIS', unit: 'job' },
-      { id: 'svc_labour', name: 'General labour', category: 'Labour', price: 9500, taxCode: 'VAT-LAB', unit: 'hour' },
+      {
+        id: "svc_oil",
+        name: "Oil & filter change",
+        category: "Maintenance",
+        price: 9900,
+        taxCode: "VAT-STD",
+        unit: "job",
+      },
+      {
+        id: "svc_brake_pad",
+        name: "Front brake pads (OEM)",
+        category: "Brakes",
+        price: 8900,
+        taxCode: "VAT-PRT",
+        unit: "set",
+      },
+      {
+        id: "svc_rotor",
+        name: "Brake rotors (pair)",
+        category: "Brakes",
+        price: 14500,
+        taxCode: "VAT-PRT",
+        unit: "pair",
+      },
+      {
+        id: "svc_brake_fluid",
+        name: "Brake fluid flush",
+        category: "Brakes",
+        price: 6900,
+        taxCode: "VAT-STD",
+        unit: "job",
+      },
+      {
+        id: "svc_brake_lab",
+        name: "Brake overhaul labour",
+        category: "Brakes",
+        price: 9500,
+        taxCode: "VAT-LAB",
+        unit: "hour",
+      },
+      {
+        id: "svc_align",
+        name: "Four-wheel alignment",
+        category: "Tyres",
+        price: 7200,
+        taxCode: "VAT-STD",
+        unit: "job",
+      },
+      {
+        id: "svc_tyre",
+        name: "Tyre replacement",
+        category: "Tyres",
+        price: 12500,
+        taxCode: "VAT-PRT",
+        unit: "tyre",
+      },
+      {
+        id: "svc_tyre_levy",
+        name: "Tyre disposal levy",
+        category: "Tyres",
+        price: 500,
+        taxCode: "ENV-TYR",
+        unit: "tyre",
+      },
+      {
+        id: "svc_ac",
+        name: "A/C recharge (R-134a)",
+        category: "Climate",
+        price: 18000,
+        taxCode: "VAT-STD",
+        unit: "job",
+      },
+      {
+        id: "svc_diag",
+        name: "Diagnostic scan",
+        category: "Diagnostics",
+        price: 6000,
+        taxCode: "VAT-STD",
+        unit: "job",
+      },
+      {
+        id: "svc_battery",
+        name: "Battery replacement",
+        category: "Electrical",
+        price: 15900,
+        taxCode: "VAT-PRT",
+        unit: "unit",
+      },
+      {
+        id: "svc_coolant",
+        name: "Coolant flush",
+        category: "Maintenance",
+        price: 8900,
+        taxCode: "VAT-STD",
+        unit: "job",
+      },
+      {
+        id: "svc_cabin",
+        name: "Cabin air filter",
+        category: "Filters",
+        price: 5900,
+        taxCode: "VAT-PRT",
+        unit: "unit",
+      },
+      {
+        id: "svc_wiper",
+        name: "Wiper blades (pair)",
+        category: "Filters",
+        price: 3200,
+        taxCode: "VAT-PRT",
+        unit: "pair",
+      },
+      {
+        id: "svc_shop",
+        name: "Shop supplies & disposal",
+        category: "Fees",
+        price: 2500,
+        taxCode: "WST-DIS",
+        unit: "job",
+      },
+      {
+        id: "svc_labour",
+        name: "General labour",
+        category: "Labour",
+        price: 9500,
+        taxCode: "VAT-LAB",
+        unit: "hour",
+      },
     ];
 
     /* helper: build a quote line with its tax snapshot */
     const mkItem = (kind, desc, qty, price, taxCode, extra) =>
       setLineTax(
-        Object.assign({ id: uid('qi'), kind, description: desc, qty, unitPrice: price }, extra || {}),
+        Object.assign(
+          { id: uid("qi"), kind, description: desc, qty, unitPrice: price },
+          extra || {},
+        ),
         taxByCode(taxCode),
       );
 
     /* ---------- JOB 1 — garage quote awaiting customer ---------- */
     S.jobs.push({
-      id: 'job_1', jobNo: 'JC-1042', garageName: 'Northgate Auto Works',
-      customerName: 'Dana Whitfield', customerEmail: 'dana.whitfield@example.com',
-      vehicle: { year: 2016, make: 'Toyota', model: 'Corolla', plate: 'KX-4471', vin: 'JT2BF22K1W0123456', odometer: 128400 },
-      status: 'QUOTING', createdAt: addDays(t, -2), pausedReason: null, dependsOnQuoteId: null,
+      id: "job_1",
+      jobNo: "JC-1042",
+      garageName: "Northgate Auto Works",
+      customerName: "Dana Whitfield",
+      customerEmail: "dana.whitfield@example.com",
+      vehicle: {
+        year: 2016,
+        make: "Toyota",
+        model: "Corolla",
+        plate: "KX-4471",
+        vin: "JT2BF22K1W0123456",
+        odometer: 128400,
+      },
+      status: "QUOTING",
+      createdAt: addDays(t, -2),
+      pausedReason: null,
+      dependsOnQuoteId: null,
     });
 
     const q1 = {
-      id: 'q_1', jobId: 'job_1', no: 'Q-1042-1', type: 'STANDARD',
-      status: 'PENDING_CUSTOMER_APPROVAL', createdByRole: 'GARAGE',
-      parentQuoteId: null, originalInvoiceId: null,
+      id: "q_1",
+      jobId: "job_1",
+      no: "Q-1042-1",
+      type: "STANDARD",
+      status: "PENDING_CUSTOMER_APPROVAL",
+      createdByRole: "GARAGE",
+      parentQuoteId: null,
+      originalInvoiceId: null,
       items: [
-        mkItem('PART', 'Front brake pads (set, OEM)', 1, 8900, 'VAT-PRT'),
-        mkItem('PART', 'Brake rotors (pair)', 1, 14500, 'VAT-PRT'),
-        mkItem('LABOR', 'Brake overhaul labour', 3.5, 9500, 'VAT-LAB'),
-        mkItem('FEE', 'Shop supplies & disposal', 1, 2500, 'WST-DIS'),
+        mkItem("PART", "Front brake pads (set, OEM)", 1, 8900, "VAT-PRT"),
+        mkItem("PART", "Brake rotors (pair)", 1, 14500, "VAT-PRT"),
+        mkItem("LABOR", "Brake overhaul labour", 3.5, 9500, "VAT-LAB"),
+        mkItem("FEE", "Shop supplies & disposal", 1, 2500, "WST-DIS"),
       ],
-      conditions: [{ id: 'qc_1', text: 'Must use OEM parts only.', addedBy: 'GARAGE', at: addDays(t, -1) }],
-      hasDependency: false, isChangeOrder: false,
-      depositType: 'PERCENT', depositValue: 30,
-      expiryDate: addDays(t, 6), revision: 1,
-      createdAt: addDays(t, -1), acceptedAt: null, rejectedAt: null, lockedAt: null,
+      conditions: [
+        {
+          id: "qc_1",
+          text: "Must use OEM parts only.",
+          addedBy: "GARAGE",
+          at: addDays(t, -1),
+        },
+      ],
+      hasDependency: false,
+      isChangeOrder: false,
+      depositType: "PERCENT",
+      depositValue: 30,
+      expiryDate: addDays(t, 6),
+      revision: 1,
+      createdAt: addDays(t, -1),
+      acceptedAt: null,
+      rejectedAt: null,
+      lockedAt: null,
     };
-    q1.revisions = [{ no: 1, total: quoteTotals(q1).total, by: 'Garage', at: addDays(t, -1) }];
+    q1.revisions = [
+      { no: 1, total: quoteTotals(q1).total, by: "Garage", at: addDays(t, -1) },
+    ];
     S.quotes.push(q1);
-    log('job_1', 'q_1', 'Garage', 'CREATE', 'Initial quote sent after vehicle inspection.', null, quoteTotals(q1).total);
+    log(
+      "job_1",
+      "q_1",
+      "Garage",
+      "CREATE",
+      "Initial quote sent after vehicle inspection.",
+      null,
+      quoteTotals(q1).total,
+    );
 
     /* ---------- JOB 2 — customer RFQ awaiting garage ---------- */
     S.jobs.push({
-      id: 'job_2', jobNo: 'JC-1043', garageName: 'Northgate Auto Works',
-      customerName: 'Dana Whitfield', customerEmail: 'dana.whitfield@example.com',
-      vehicle: { year: 2019, make: 'Honda', model: 'Civic', plate: 'PL-8890', vin: '19XFC2F59KE001234', odometer: 61200 },
-      status: 'REQUESTED', createdAt: addDays(t, -1), pausedReason: null, dependsOnQuoteId: null,
+      id: "job_2",
+      jobNo: "JC-1043",
+      garageName: "Northgate Auto Works",
+      customerName: "Dana Whitfield",
+      customerEmail: "dana.whitfield@example.com",
+      vehicle: {
+        year: 2019,
+        make: "Honda",
+        model: "Civic",
+        plate: "PL-8890",
+        vin: "19XFC2F59KE001234",
+        odometer: 61200,
+      },
+      status: "REQUESTED",
+      createdAt: addDays(t, -1),
+      pausedReason: null,
+      dependsOnQuoteId: null,
     });
 
     const q2 = {
-      id: 'q_2', jobId: 'job_2', no: 'Q-1043-1', type: 'STANDARD',
-      status: 'PENDING_GARAGE_APPROVAL', createdByRole: 'CUSTOMER',
-      parentQuoteId: null, originalInvoiceId: null,
+      id: "q_2",
+      jobId: "job_2",
+      no: "Q-1043-1",
+      type: "STANDARD",
+      status: "PENDING_GARAGE_APPROVAL",
+      createdByRole: "CUSTOMER",
+      parentQuoteId: null,
+      originalInvoiceId: null,
       items: [
-        mkItem('LABOR', 'A/C not cooling — diagnostic inspection', 1, 6000, 'VAT-LAB'),
-        mkItem('SERVICE', 'Refrigerant recharge (R-134a)', 1, 18000, 'VAT-STD'),
+        mkItem(
+          "LABOR",
+          "A/C not cooling — diagnostic inspection",
+          1,
+          6000,
+          "VAT-LAB",
+        ),
+        mkItem("SERVICE", "Refrigerant recharge (R-134a)", 1, 18000, "VAT-STD"),
       ],
-      conditions: [{ id: 'qc_2', text: 'Budget cap is $400.00 — please confirm before exceeding.', addedBy: 'CUSTOMER', at: addDays(t, -1) }],
-      hasDependency: false, isChangeOrder: false,
-      depositType: 'PERCENT', depositValue: 30,
-      expiryDate: addDays(t, 9), revision: 1,
-      createdAt: addDays(t, -1), acceptedAt: null, rejectedAt: null, lockedAt: null,
+      conditions: [
+        {
+          id: "qc_2",
+          text: "Budget cap is $400.00 — please confirm before exceeding.",
+          addedBy: "CUSTOMER",
+          at: addDays(t, -1),
+        },
+      ],
+      hasDependency: false,
+      isChangeOrder: false,
+      depositType: "PERCENT",
+      depositValue: 30,
+      expiryDate: addDays(t, 9),
+      revision: 1,
+      createdAt: addDays(t, -1),
+      acceptedAt: null,
+      rejectedAt: null,
+      lockedAt: null,
     };
-    q2.revisions = [{ no: 1, total: quoteTotals(q2).total, by: 'Customer', at: addDays(t, -1) }];
+    q2.revisions = [
+      {
+        no: 1,
+        total: quoteTotals(q2).total,
+        by: "Customer",
+        at: addDays(t, -1),
+      },
+    ];
     S.quotes.push(q2);
-    log('job_2', 'q_2', 'Customer', 'CREATE', 'Request for Quote submitted with budget cap.', null, quoteTotals(q2).total);
+    log(
+      "job_2",
+      "q_2",
+      "Customer",
+      "CREATE",
+      "Request for Quote submitted with budget cap.",
+      null,
+      quoteTotals(q2).total,
+    );
 
     /* ---------- JOB 3 — accepted, invoiced, deposit paid ---------- */
     S.jobs.push({
-      id: 'job_3', jobNo: 'JC-1044', garageName: 'Northgate Auto Works',
-      customerName: 'Dana Whitfield', customerEmail: 'dana.whitfield@example.com',
-      vehicle: { year: 2021, make: 'BMW', model: '320i', plate: 'BM-2210', vin: 'WBA5R1C0XMFL12345', odometer: 34850 },
-      status: 'IN_PROGRESS', createdAt: addDays(t, -6), pausedReason: null, dependsOnQuoteId: null,
+      id: "job_3",
+      jobNo: "JC-1044",
+      garageName: "Northgate Auto Works",
+      customerName: "Dana Whitfield",
+      customerEmail: "dana.whitfield@example.com",
+      vehicle: {
+        year: 2021,
+        make: "BMW",
+        model: "320i",
+        plate: "BM-2210",
+        vin: "WBA5R1C0XMFL12345",
+        odometer: 34850,
+      },
+      status: "IN_PROGRESS",
+      createdAt: addDays(t, -6),
+      pausedReason: null,
+      dependsOnQuoteId: null,
     });
 
     const q3 = {
-      id: 'q_3', jobId: 'job_3', no: 'Q-1044-1', type: 'STANDARD',
-      status: 'ACCEPTED', createdByRole: 'GARAGE',
-      parentQuoteId: null, originalInvoiceId: null,
+      id: "q_3",
+      jobId: "job_3",
+      no: "Q-1044-1",
+      type: "STANDARD",
+      status: "ACCEPTED",
+      createdByRole: "GARAGE",
+      parentQuoteId: null,
+      originalInvoiceId: null,
       items: [
-        mkItem('SERVICE', 'Oil & filter change', 1, 9900, 'VAT-STD', { packageRef: 'pkg_full', standaloneUnitPrice: 12000 }),
-        mkItem('SERVICE', 'Brake fluid flush', 1, 6900, 'VAT-STD', { packageRef: 'pkg_full', standaloneUnitPrice: 9000 }),
-        mkItem('SERVICE', 'Cabin air filter replacement', 1, 5900, 'VAT-PRT', { packageRef: 'pkg_full', standaloneUnitPrice: 7000 }),
-        mkItem('SERVICE', 'Four-wheel alignment', 1, 7200, 'VAT-STD', { packageRef: 'pkg_full', standaloneUnitPrice: 11000 }),
+        mkItem("SERVICE", "Oil & filter change", 1, 9900, "VAT-STD", {
+          packageRef: "pkg_full",
+          standaloneUnitPrice: 12000,
+        }),
+        mkItem("SERVICE", "Brake fluid flush", 1, 6900, "VAT-STD", {
+          packageRef: "pkg_full",
+          standaloneUnitPrice: 9000,
+        }),
+        mkItem("SERVICE", "Cabin air filter replacement", 1, 5900, "VAT-PRT", {
+          packageRef: "pkg_full",
+          standaloneUnitPrice: 7000,
+        }),
+        mkItem("SERVICE", "Four-wheel alignment", 1, 7200, "VAT-STD", {
+          packageRef: "pkg_full",
+          standaloneUnitPrice: 11000,
+        }),
       ],
-      conditions: [{ id: 'qc_3', text: 'Bundled "Full Service Package" price — discounted vs. standalone rates.', addedBy: 'GARAGE', at: addDays(t, -6) }],
-      hasDependency: false, isChangeOrder: false,
-      depositType: 'PERCENT', depositValue: 30,
-      expiryDate: addDays(t, -1), revision: 1,
-      createdAt: addDays(t, -6), acceptedAt: addDays(t, -5), rejectedAt: null, lockedAt: addDays(t, -5),
+      conditions: [
+        {
+          id: "qc_3",
+          text: 'Bundled "Full Service Package" price — discounted vs. standalone rates.',
+          addedBy: "GARAGE",
+          at: addDays(t, -6),
+        },
+      ],
+      hasDependency: false,
+      isChangeOrder: false,
+      depositType: "PERCENT",
+      depositValue: 30,
+      expiryDate: addDays(t, -1),
+      revision: 1,
+      createdAt: addDays(t, -6),
+      acceptedAt: addDays(t, -5),
+      rejectedAt: null,
+      lockedAt: addDays(t, -5),
     };
-    q3.revisions = [{ no: 1, total: quoteTotals(q3).total, by: 'Garage', at: addDays(t, -6) }];
+    q3.revisions = [
+      { no: 1, total: quoteTotals(q3).total, by: "Garage", at: addDays(t, -6) },
+    ];
     S.quotes.push(q3);
 
     const inv3 = {
-      id: 'inv_3', jobId: 'job_3', quoteId: 'q_3', no: 'INV-5003', kind: 'TAX_INVOICE',
-      originalInvoiceId: null, settlementQuoteId: null, supersededBy: null,
+      id: "inv_3",
+      jobId: "job_3",
+      quoteId: "q_3",
+      no: "INV-5003",
+      kind: "TAX_INVOICE",
+      originalInvoiceId: null,
+      settlementQuoteId: null,
+      supersedes: null,
+      supersededBy: null,
+      voidedAt: null,
+      voidReason: null,
+      seq: 1,
+      paymentId: null,
       lines: linesFromQuote(q3, false),
-      issuedAt: addDays(t, -5), dueAt: addDays(t, 9),
-      depositRequired: depositFor(q3), depositType: 'PERCENT', depositValue: 30,
+      issuedAt: addDays(t, -5),
+      dueAt: addDays(t, 9),
+      depositRequired: depositFor(q3),
+      depositType: "PERCENT",
+      depositValue: 30,
     };
     S.invoices.push(inv3);
     syncInvoice(inv3);
 
     S.payments.push({
-      id: 'pay_3', invoiceId: 'inv_3', no: 'PAY-9003', amount: inv3.depositRequired,
-      type: 'DEPOSIT', method: 'CARD', status: 'SUCCEEDED', paidAt: addDays(t, -4),
+      id: "pay_3",
+      invoiceId: "inv_3",
+      no: "PAY-9003",
+      amount: inv3.depositRequired,
+      type: "DEPOSIT",
+      method: "CARD",
+      status: "SUCCEEDED",
+      paidAt: addDays(t, -4),
     });
     S.receipts.push({
-      id: 'rec_3', paymentId: 'pay_3', no: 'RCP-7003',
-      issuedAt: addDays(t, -4), emailedTo: 'dana.whitfield@example.com',
+      id: "rec_3",
+      paymentId: "pay_3",
+      invoiceId: "inv_3",
+      jobId: "job_3",
+      no: "RCP-7003",
+      status: "VALID",
+      issuedAt: addDays(t, -4),
+      emailedTo: "dana.whitfield@example.com",
+      paidToDate: inv3.depositRequired,
+      balanceAfter: inv3.total - inv3.depositRequired,
+      supersededBy: null,
+      voidedAt: null,
     });
     syncInvoice(inv3);
 
-    log('job_3', 'q_3', 'Garage', 'CREATE', 'Full Service Package quoted (bundled pricing).', null, quoteTotals(q3).total);
-    log('job_3', 'q_3', 'Customer', 'ACCEPT', 'Quote accepted and locked.', quoteTotals(q3).total, quoteTotals(q3).total);
-    log('job_3', null, 'System', 'INVOICE_ISSUED', 'Invoice INV-5003 generated from accepted quote.', null, inv3.total);
-    log('job_3', null, 'System', 'PAYMENT_RECEIVED', `PAY-9003 · ${money(inv3.depositRequired)} deposit (CARD). Receipt RCP-7003 emailed.`, null, inv3.depositRequired);
-    log('job_3', null, 'Garage', 'WORK_STARTED', 'Deposit received — work commenced.', null, null);
+    log(
+      "job_3",
+      "q_3",
+      "Garage",
+      "CREATE",
+      "Full Service Package quoted (bundled pricing).",
+      null,
+      quoteTotals(q3).total,
+    );
+    log(
+      "job_3",
+      "q_3",
+      "Customer",
+      "ACCEPT",
+      "Quote accepted and locked.",
+      quoteTotals(q3).total,
+      quoteTotals(q3).total,
+    );
+    log(
+      "job_3",
+      null,
+      "System",
+      "INVOICE_ISSUED",
+      "Invoice INV-5003 generated from accepted quote.",
+      null,
+      inv3.total,
+    );
+    log(
+      "job_3",
+      null,
+      "System",
+      "PAYMENT_RECEIVED",
+      `PAY-9003 · ${money(inv3.depositRequired)} deposit (CARD). Receipt RCP-7003 emailed.`,
+      null,
+      inv3.depositRequired,
+    );
+    log(
+      "job_3",
+      null,
+      "Garage",
+      "WORK_STARTED",
+      "Deposit received — work commenced.",
+      null,
+      null,
+    );
+  }
+
+  /* Open the full-screen quote builder on a given quote. */
+  function openBuilder(state, quoteId) {
+    state.screen = "builder";
+    state.builderQuoteId = quoteId;
+    state.builderSearch = "";
+    state.builderCat = "all";
+    state.editingQuoteId = null;
+    return state;
   }
 
   /* =========================================================
      ACTIONS
      ========================================================= */
   const actions = {
-
     /* ---------- navigation ---------- */
-    setRole(role) { S.role = role; S.screen = 'job'; S.editingQuoteId = null; refresh(); },
-    setScreen(screen) { S.screen = screen; S.tab = 'overview'; S.editingQuoteId = null; refresh(); },
-    selectJob(id) { S.jobId = id; S.screen = 'job'; S.tab = 'overview'; S.editingQuoteId = null; refresh(); },
-    setTab(tab) { S.tab = tab; S.editingQuoteId = null; refresh(); },
+    setRole(role) {
+      S.role = role;
+      S.screen = "job";
+      S.editingQuoteId = null;
+      refresh();
+    },
+    setScreen(screen) {
+      S.screen = screen;
+      S.tab = "overview";
+      S.editingQuoteId = null;
+      refresh();
+    },
+    selectJob(id) {
+      S.jobId = id;
+      S.screen = "job";
+      S.tab = "overview";
+      S.editingQuoteId = null;
+      refresh();
+    },
+    setTab(tab) {
+      S.tab = tab;
+      S.editingQuoteId = null;
+      refresh();
+    },
     reset() {
       seed();
-      S.role = 'garage'; S.screen = 'job'; S.jobId = 'job_1'; S.tab = 'overview'; S.editingQuoteId = null;
+      S.role = "garage";
+      S.screen = "job";
+      S.jobId = "job_1";
+      S.tab = "overview";
+      S.editingQuoteId = null;
       refresh();
     },
 
+    /* ---------- quote builder (full screen) ---------- */
+    openBuilder(quoteId) {
+      openBuilder(S, quoteId);
+      refresh();
+    },
+    closeBuilder() {
+      S.screen = "job";
+      S.builderQuoteId = null;
+      S.tab = "quotes";
+      refresh();
+    },
+    builderCat(cat) {
+      S.builderCat = cat;
+      refresh();
+    },
+    builderSearch(value) {
+      S.builderSearch = value; // list filtering happens in the DOM
+    },
+    builderAddService(serviceId) {
+      if (!S.builderQuoteId) return;
+      actions.addServices(S.builderQuoteId, [serviceId]);
+    },
+    builderBlankLine() {
+      if (!S.builderQuoteId) return;
+      actions.addItem(S.builderQuoteId);
+    },
+    builderRemoveItem(itemId) {
+      if (!S.builderQuoteId) return;
+      actions.removeItem(S.builderQuoteId, itemId);
+    },
+    builderSetDeposit(type, value) {
+      const q = sel.quote(S.builderQuoteId);
+      if (!q) return;
+      q.depositType = type;
+      q.depositValue = Number(value) || 0;
+      refresh();
+    },
+    builderCreateService(payload) {
+      const price = Math.round((Number(payload.price) || 0) * 100);
+      const svc = {
+        id: uid("svc"),
+        name: payload.name,
+        category: payload.category || "General",
+        price,
+        taxCode: payload.taxCode,
+        unit: "job",
+      };
+      S.services.push(svc);
+      log(
+        S.jobId,
+        null,
+        "Garage",
+        "SERVICE_CREATED",
+        `Catalog service "${svc.name}" created.`,
+        null,
+        price,
+      );
+      if (S.builderQuoteId) {
+        const line = {
+          id: uid("qi"),
+          kind: svc.category === "Labour" ? "LABOR" : "SERVICE",
+          description: svc.name,
+          qty: 1,
+          unitPrice: svc.price,
+          serviceId: svc.id,
+        };
+        setLineTax(line, taxByCode(svc.taxCode) || defaultTaxFor(line.kind));
+        sel.quote(S.builderQuoteId).items.push(line);
+      }
+      toast(`Service "${svc.name}" created and added.`, "ok");
+      refresh();
+    },
+    builderSaveDraft() {
+      const q = sel.quote(S.builderQuoteId);
+      if (!q) return;
+      log(
+        q.jobId,
+        q.id,
+        "Garage",
+        "QUOTE_DRAFT",
+        `Quote ${q.no} saved as draft (${money(quoteTotals(q).total)}).`,
+        null,
+        quoteTotals(q).total,
+      );
+      S.screen = "job";
+      S.builderQuoteId = null;
+      S.tab = "quotes";
+      toast("Draft saved.", "ok");
+      refresh();
+    },
+    builderSend() {
+      const id = S.builderQuoteId;
+      if (!id) return;
+      S.screen = "job";
+      S.builderQuoteId = null;
+      S.tab = "quotes";
+      actions.sendQuote(id);
+    },
+
     /* ---------- quote editing ---------- */
-    startEdit(quoteId) { S.editingQuoteId = quoteId; S.tab = 'quotes'; refresh(); },
-    cancelEdit() { S.editingQuoteId = null; refresh(); },
+    startEdit(quoteId) {
+      S.editingQuoteId = quoteId;
+      S.tab = "quotes";
+      refresh();
+    },
+    cancelEdit() {
+      S.editingQuoteId = null;
+      refresh();
+    },
 
     addItem(quoteId) {
       const q = sel.quote(quoteId);
-      const line = { id: uid('qi'), kind: 'LABOR', description: 'Custom line item', qty: 1, unitPrice: 0 };
-      setLineTax(line, defaultTaxFor('LABOR'));
+      const line = {
+        id: uid("qi"),
+        kind: "LABOR",
+        description: "Custom line item",
+        qty: 1,
+        unitPrice: 0,
+      };
+      setLineTax(line, defaultTaxFor("LABOR"));
       q.items.push(line);
       refresh();
     },
@@ -488,14 +1194,17 @@
         const svc = sel.service(id);
         if (!svc) return;
         const line = {
-          id: uid('qi'),
-          kind: svc.category === 'Labour' ? 'LABOR' : 'SERVICE',
-          description: svc.name, qty: 1, unitPrice: svc.price, serviceId: svc.id,
+          id: uid("qi"),
+          kind: svc.category === "Labour" ? "LABOR" : "SERVICE",
+          description: svc.name,
+          qty: 1,
+          unitPrice: svc.price,
+          serviceId: svc.id,
         };
         setLineTax(line, taxByCode(svc.taxCode) || defaultTaxFor(line.kind));
         q.items.push(line);
       });
-      toast(`${ids.length} service${ids.length > 1 ? 's' : ''} added.`, 'ok');
+      toast(`${ids.length} service${ids.length > 1 ? "s" : ""} added.`, "ok");
       refresh();
     },
 
@@ -510,45 +1219,93 @@
       const job = sel.job(q.jobId);
       const before = (q.revisions[q.revisions.length - 1] || {}).total || 0;
       const after = quoteTotals(q).total;
-      const actor = S.role === 'customer' ? 'Customer' : 'Garage';
+      const actor = S.role === "customer" ? "Customer" : "Garage";
 
       q.revision += 1;
       q.revisions = q.revisions || [];
-      q.revisions.push({ no: q.revision, total: after, by: actor, at: nowISO() });
-      q.status = S.role === 'customer' ? 'PENDING_GARAGE_APPROVAL' : 'PENDING_CUSTOMER_APPROVAL';
+      q.revisions.push({
+        no: q.revision,
+        total: after,
+        by: actor,
+        at: nowISO(),
+      });
+      q.status =
+        S.role === "customer"
+          ? "PENDING_GARAGE_APPROVAL"
+          : "PENDING_CUSTOMER_APPROVAL";
       q.expiryDate = addDays(nowISO(), 7);
       S.editingQuoteId = null;
 
-      log(q.jobId, q.id, actor, 'COUNTER_OFFER', `Revision ${q.revision} sent for approval.`, before, after);
+      log(
+        q.jobId,
+        q.id,
+        actor,
+        "COUNTER_OFFER",
+        `Revision ${q.revision} sent for approval.`,
+        before,
+        after,
+      );
 
-      if (q.hasDependency && S.role === 'garage') {
-        job.status = 'PAUSED_PENDING_APPROVAL';
+      if (q.hasDependency && S.role === "garage") {
+        job.status = "PAUSED_PENDING_APPROVAL";
         job.pausedReason = `Blocking change order ${q.no} awaiting customer decision.`;
         job.dependsOnQuoteId = q.id;
-        log(q.jobId, q.id, 'System', 'JOB_PAUSED', 'Work paused — change order flagged as blocking.', null, null);
+        log(
+          q.jobId,
+          q.id,
+          "System",
+          "JOB_PAUSED",
+          "Work paused — change order flagged as blocking.",
+          null,
+          null,
+        );
       }
-      toast(`Counter-offer sent — waiting for the ${S.role === 'customer' ? 'garage' : 'customer'}.`, 'ok');
+      toast(
+        `Counter-offer sent — waiting for the ${S.role === "customer" ? "garage" : "customer"}.`,
+        "ok",
+      );
       refresh();
     },
 
     sendQuote(quoteId) {
       const q = sel.quote(quoteId);
       const job = sel.job(q.jobId);
-      q.status = 'PENDING_CUSTOMER_APPROVAL';
+      q.status = "PENDING_CUSTOMER_APPROVAL";
       q.revision += 1;
       q.revisions = q.revisions || [];
-      q.revisions.push({ no: q.revision, total: quoteTotals(q).total, by: 'Garage', at: nowISO() });
+      q.revisions.push({
+        no: q.revision,
+        total: quoteTotals(q).total,
+        by: "Garage",
+        at: nowISO(),
+      });
       S.editingQuoteId = null;
 
-      log(q.jobId, q.id, 'Garage', 'CREATE', `Quote ${q.no} sent to customer for approval.`, null, quoteTotals(q).total);
+      log(
+        q.jobId,
+        q.id,
+        "Garage",
+        "CREATE",
+        `Quote ${q.no} sent to customer for approval.`,
+        null,
+        quoteTotals(q).total,
+      );
 
       if (q.hasDependency) {
-        job.status = 'PAUSED_PENDING_APPROVAL';
+        job.status = "PAUSED_PENDING_APPROVAL";
         job.pausedReason = `Blocking change order ${q.no} awaiting customer decision.`;
         job.dependsOnQuoteId = q.id;
-        log(q.jobId, q.id, 'System', 'JOB_PAUSED', 'Work paused — change order flagged as blocking.', null, null);
+        log(
+          q.jobId,
+          q.id,
+          "System",
+          "JOB_PAUSED",
+          "Work paused — change order flagged as blocking.",
+          null,
+          null,
+        );
       }
-      toast('Quote sent to the customer.', 'ok');
+      toast("Quote sent to the customer.", "ok");
       refresh();
     },
 
@@ -556,11 +1313,19 @@
       const q = sel.quote(quoteId);
       if (!text || !text.trim()) return;
       q.conditions.push({
-        id: uid('qc'), text: text.trim(),
-        addedBy: S.role === 'customer' ? 'CUSTOMER' : 'GARAGE', at: nowISO(),
+        id: uid("qc"),
+        text: text.trim(),
+        addedBy: S.role === "customer" ? "CUSTOMER" : "GARAGE",
+        at: nowISO(),
       });
-      log(q.jobId, q.id, S.role === 'customer' ? 'Customer' : 'Garage', 'ADD_CONDITION', text.trim());
-      toast('Condition added to the quote.', 'ok');
+      log(
+        q.jobId,
+        q.id,
+        S.role === "customer" ? "Customer" : "Garage",
+        "ADD_CONDITION",
+        text.trim(),
+      );
+      toast("Condition added to the quote.", "ok");
       refresh();
     },
 
@@ -568,78 +1333,150 @@
     acceptQuote(quoteId) {
       const q = sel.quote(quoteId);
       const job = sel.job(q.jobId);
-      const actor = S.role === 'customer' ? 'Customer' : 'Garage';
+      const actor = S.role === "customer" ? "Customer" : "Garage";
       const total = quoteTotals(q).total;
 
-      q.status = 'ACCEPTED';
+      q.status = "ACCEPTED";
       q.acceptedAt = nowISO();
       q.lockedAt = nowISO();
-      log(q.jobId, q.id, actor, 'ACCEPT', `Quote ${q.no} accepted and locked.`, total, total);
+      log(
+        q.jobId,
+        q.id,
+        actor,
+        "ACCEPT",
+        `Quote ${q.no} accepted and locked.`,
+        total,
+        total,
+      );
 
-      if (q.type === 'SETTLEMENT') {
-        job.status = 'CANCELLED';
+      if (q.type === "SETTLEMENT") {
+        job.status = "CANCELLED";
         job.pausedReason = null;
         job.dependsOnQuoteId = null;
         const cancel = sel.openCancellation(job.id);
-        if (cancel) { cancel.status = 'AGREED'; cancel.settlementQuoteId = q.id; cancel.resolvedAt = nowISO(); }
-        log(q.jobId, q.id, 'System', 'SETTLEMENT_AGREED', 'Settlement agreed — generate the final invoice.', null, total);
-        toast('Settlement agreed — generate the final invoice.', 'ok');
+        if (cancel) {
+          cancel.status = "AGREED";
+          cancel.settlementQuoteId = q.id;
+          cancel.resolvedAt = nowISO();
+        }
+        log(
+          q.jobId,
+          q.id,
+          "System",
+          "SETTLEMENT_AGREED",
+          "Settlement agreed — generate the final invoice.",
+          null,
+          total,
+        );
+        toast("Settlement agreed — generate the final invoice.", "ok");
         refresh();
         return;
       }
 
-      if (q.type === 'SUPPLEMENTARY') {
-        if (job.status === 'PAUSED_PENDING_APPROVAL' && q.hasDependency) {
-          job.status = 'IN_PROGRESS';
+      if (q.type === "SUPPLEMENTARY") {
+        if (job.status === "PAUSED_PENDING_APPROVAL" && q.hasDependency) {
+          job.status = "IN_PROGRESS";
           job.pausedReason = null;
           job.dependsOnQuoteId = null;
-          log(q.jobId, q.id, 'System', 'JOB_RESUMED', 'Blocking work approved — work resumed.', null, null);
+          log(
+            q.jobId,
+            q.id,
+            "System",
+            "JOB_RESUMED",
+            "Blocking work approved — work resumed.",
+            null,
+            null,
+          );
         }
-        toast('Add-on accepted — update the invoice to bill it.', 'ok');
+        toast("Add-on accepted — update the invoice to bill it.", "ok");
         refresh();
         return;
       }
 
       /* STANDARD or WARRANTY: no invoice is created automatically. */
-      job.status = 'AWAITING_INVOICE';
-      job.pausedReason = q.type === 'WARRANTY'
-        ? 'Warranty quote accepted — generate the $0.00 invoice.'
-        : 'Quote accepted — generate the invoice to collect payment.';
-      log(q.jobId, q.id, 'System', 'AWAITING_INVOICE', 'Quote locked. Invoice must be generated by the garage.', null, null);
+      job.status = "AWAITING_INVOICE";
+      job.pausedReason =
+        q.type === "WARRANTY"
+          ? "Warranty quote accepted — generate the $0.00 invoice."
+          : "Quote accepted — generate the invoice to collect payment.";
+      log(
+        q.jobId,
+        q.id,
+        "System",
+        "AWAITING_INVOICE",
+        "Quote locked. Invoice must be generated by the garage.",
+        null,
+        null,
+      );
 
-      toast('Quote accepted — now generate the invoice.', 'ok');
+      toast("Quote accepted — now generate the invoice.", "ok");
       refresh();
     },
 
     rejectQuote(quoteId) {
       const q = sel.quote(quoteId);
       const job = sel.job(q.jobId);
-      const actor = S.role === 'customer' ? 'Customer' : 'Garage';
-      q.status = 'REJECTED';
+      const actor = S.role === "customer" ? "Customer" : "Garage";
+      q.status = "REJECTED";
       q.rejectedAt = nowISO();
 
-      if (q.type === 'SUPPLEMENTARY') {
+      if (q.type === "SUPPLEMENTARY") {
         if (q.hasDependency) {
-          job.status = 'PAUSED_PENDING_APPROVAL';
+          job.status = "PAUSED_PENDING_APPROVAL";
           job.pausedReason = `Blocking work ${q.no} was rejected. Garage must agree a way forward.`;
-          log(q.jobId, q.id, actor, 'REJECT', `Blocking change order ${q.no} rejected — job remains paused.`, quoteTotals(q).total, null);
+          log(
+            q.jobId,
+            q.id,
+            actor,
+            "REJECT",
+            `Blocking change order ${q.no} rejected — job remains paused.`,
+            quoteTotals(q).total,
+            null,
+          );
         } else {
-          log(q.jobId, q.id, actor, 'REJECT', `Add-on ${q.no} rejected. Original approved work continues unaffected.`, quoteTotals(q).total, null);
-          if (job.status === 'PAUSED_PENDING_APPROVAL' && job.dependsOnQuoteId === q.id) {
-            job.status = 'IN_PROGRESS';
+          log(
+            q.jobId,
+            q.id,
+            actor,
+            "REJECT",
+            `Add-on ${q.no} rejected. Original approved work continues unaffected.`,
+            quoteTotals(q).total,
+            null,
+          );
+          if (
+            job.status === "PAUSED_PENDING_APPROVAL" &&
+            job.dependsOnQuoteId === q.id
+          ) {
+            job.status = "IN_PROGRESS";
             job.pausedReason = null;
             job.dependsOnQuoteId = null;
           }
         }
-      } else if (q.type === 'SETTLEMENT') {
+      } else if (q.type === "SETTLEMENT") {
         const c = sel.openCancellation(job.id);
-        if (c) c.status = 'UNDER_REVIEW';
-        log(q.jobId, q.id, actor, 'REJECT', `Settlement quote ${q.no} rejected — renegotiation required.`, quoteTotals(q).total, null);
+        if (c) c.status = "UNDER_REVIEW";
+        log(
+          q.jobId,
+          q.id,
+          actor,
+          "REJECT",
+          `Settlement quote ${q.no} rejected — renegotiation required.`,
+          quoteTotals(q).total,
+          null,
+        );
       } else {
-        job.status = 'CANCELLED';
-        log(q.jobId, q.id, actor, 'REJECT', `Quote ${q.no} rejected — job cancelled.`, quoteTotals(q).total, null);
+        job.status = "CANCELLED";
+        log(
+          q.jobId,
+          q.id,
+          actor,
+          "REJECT",
+          `Quote ${q.no} rejected — job cancelled.`,
+          quoteTotals(q).total,
+          null,
+        );
       }
-      toast('Quote rejected.', 'warn');
+      toast("Quote rejected.", "warn");
       refresh();
     },
 
@@ -648,76 +1485,185 @@
       const job = sel.job(jobId);
       const parent = sel.stdQuote(jobId) || sel.activeQuote(jobId);
       const q = {
-        id: uid('q'), jobId, no: nextQuoteNo(job), type: 'SUPPLEMENTARY',
-        status: 'DRAFT', createdByRole: 'GARAGE',
-        parentQuoteId: parent ? parent.id : null, originalInvoiceId: null,
-        items: [setLineTax({ id: uid('qi'), kind: 'PART', description: 'Additional part discovered', qty: 1, unitPrice: 0 }, defaultTaxFor('PART'))],
-        conditions: [], revisions: [],
-        hasDependency: false, isChangeOrder: true,
-        depositType: 'NONE', depositValue: 0,
-        expiryDate: addDays(nowISO(), 3), revision: 0,
-        createdAt: nowISO(), acceptedAt: null, rejectedAt: null, lockedAt: null,
+        id: uid("q"),
+        jobId,
+        no: nextQuoteNo(job),
+        type: "SUPPLEMENTARY",
+        status: "DRAFT",
+        createdByRole: "GARAGE",
+        parentQuoteId: parent ? parent.id : null,
+        originalInvoiceId: null,
+        items: [
+          setLineTax(
+            {
+              id: uid("qi"),
+              kind: "PART",
+              description: "Additional part discovered",
+              qty: 1,
+              unitPrice: 0,
+            },
+            defaultTaxFor("PART"),
+          ),
+        ],
+        conditions: [],
+        revisions: [],
+        hasDependency: false,
+        isChangeOrder: true,
+        depositType: "NONE",
+        depositValue: 0,
+        expiryDate: addDays(nowISO(), 3),
+        revision: 0,
+        createdAt: nowISO(),
+        acceptedAt: null,
+        rejectedAt: null,
+        lockedAt: null,
       };
       S.quotes.push(q);
-      S.editingQuoteId = q.id;
-      S.tab = 'quotes';
-      log(jobId, q.id, 'Garage', 'CREATE', 'Supplementary quote started — new issue found mid-job.', null, 0);
-      toast('Supplementary quote started. Add the extra lines, then send it.', 'ok');
+      openBuilder(S, q.id);
+      log(
+        jobId,
+        q.id,
+        "Garage",
+        "CREATE",
+        "Supplementary quote started — new issue found mid-job.",
+        null,
+        0,
+      );
+      toast(
+        "Supplementary quote started. Add the extra lines, then send it.",
+        "ok",
+      );
       refresh();
     },
 
     createWarranty(jobId) {
       const job = sel.job(jobId);
-      const origInv = sel.invoicesForJob(jobId).find((i) => i.kind === 'TAX_INVOICE');
+      const origInv = sel
+        .invoicesForJob(jobId)
+        .find((i) => i.kind === "TAX_INVOICE");
       const origQuote = sel.stdQuote(jobId);
       const items = (origQuote ? origQuote.items : []).map((i) =>
-        setLineTax({
-          id: uid('qi'), kind: i.kind,
-          description: `[Warranty rework] ${i.description}`,
-          qty: i.qty, unitPrice: 0, unitPriceOriginal: i.unitPrice,
-        }, null),
+        setLineTax(
+          {
+            id: uid("qi"),
+            kind: i.kind,
+            description: `[Warranty rework] ${i.description}`,
+            qty: i.qty,
+            unitPrice: 0,
+            unitPriceOriginal: i.unitPrice,
+          },
+          null,
+        ),
       );
       if (!items.length) {
-        items.push(setLineTax({ id: uid('qi'), kind: 'LABOR', description: '[Warranty rework] Re-do previous repair', qty: 1, unitPrice: 0, unitPriceOriginal: 9500 }, null));
+        items.push(
+          setLineTax(
+            {
+              id: uid("qi"),
+              kind: "LABOR",
+              description: "[Warranty rework] Re-do previous repair",
+              qty: 1,
+              unitPrice: 0,
+              unitPriceOriginal: 9500,
+            },
+            null,
+          ),
+        );
       }
 
       const q = {
-        id: uid('q'), jobId, no: nextQuoteNo(job), type: 'WARRANTY',
-        status: 'DRAFT', createdByRole: 'GARAGE',
+        id: uid("q"),
+        jobId,
+        no: nextQuoteNo(job),
+        type: "WARRANTY",
+        status: "DRAFT",
+        createdByRole: "GARAGE",
         parentQuoteId: origQuote ? origQuote.id : null,
         originalInvoiceId: origInv ? origInv.id : null,
         items,
-        conditions: [{ id: uid('qc'), text: 'Zero-dollar rework — covered under warranty. No charge to customer.', addedBy: 'GARAGE', at: nowISO() }],
-        revisions: [], hasDependency: false, isChangeOrder: false,
-        depositType: 'NONE', depositValue: 0,
-        expiryDate: addDays(nowISO(), 14), revision: 0,
-        createdAt: nowISO(), acceptedAt: null, rejectedAt: null, lockedAt: null, invoicedAt: null,
+        conditions: [
+          {
+            id: uid("qc"),
+            text: "Zero-dollar rework — covered under warranty. No charge to customer.",
+            addedBy: "GARAGE",
+            at: nowISO(),
+          },
+        ],
+        revisions: [],
+        hasDependency: false,
+        isChangeOrder: false,
+        depositType: "NONE",
+        depositValue: 0,
+        expiryDate: addDays(nowISO(), 14),
+        revision: 0,
+        createdAt: nowISO(),
+        acceptedAt: null,
+        rejectedAt: null,
+        lockedAt: null,
+        invoicedAt: null,
       };
       S.quotes.push(q);
-      S.editingQuoteId = q.id;
-      S.tab = 'quotes';
-      log(jobId, q.id, 'Garage', 'CREATE', `Warranty quote raised against ${origInv ? origInv.no : 'original invoice'}.`, null, 0);
-      toast('Warranty quote created at $0.00 line items.', 'ok');
+      openBuilder(S, q.id);
+      log(
+        jobId,
+        q.id,
+        "Garage",
+        "CREATE",
+        `Warranty quote raised against ${origInv ? origInv.no : "original invoice"}.`,
+        null,
+        0,
+      );
+      toast("Warranty quote created at $0.00 line items.", "ok");
       refresh();
     },
 
     createGarageQuote(jobId) {
       const job = sel.job(jobId);
       const q = {
-        id: uid('q'), jobId, no: nextQuoteNo(job), type: 'STANDARD',
-        status: 'DRAFT', createdByRole: 'GARAGE',
-        parentQuoteId: null, originalInvoiceId: null,
-        items: [setLineTax({ id: uid('qi'), kind: 'LABOR', description: 'Labour', qty: 1, unitPrice: 9500 }, defaultTaxFor('LABOR'))],
-        conditions: [], revisions: [],
-        hasDependency: false, isChangeOrder: false,
-        depositType: S.settings.depositType, depositValue: S.settings.depositValue,
-        expiryDate: addDays(nowISO(), 7), revision: 0,
-        createdAt: nowISO(), acceptedAt: null, rejectedAt: null, lockedAt: null,
+        id: uid("q"),
+        jobId,
+        no: nextQuoteNo(job),
+        type: "STANDARD",
+        status: "DRAFT",
+        createdByRole: "GARAGE",
+        parentQuoteId: null,
+        originalInvoiceId: null,
+        items: [
+          setLineTax(
+            {
+              id: uid("qi"),
+              kind: "LABOR",
+              description: "Labour",
+              qty: 1,
+              unitPrice: 9500,
+            },
+            defaultTaxFor("LABOR"),
+          ),
+        ],
+        conditions: [],
+        revisions: [],
+        hasDependency: false,
+        isChangeOrder: false,
+        depositType: S.settings.depositType,
+        depositValue: S.settings.depositValue,
+        expiryDate: addDays(nowISO(), 7),
+        revision: 0,
+        createdAt: nowISO(),
+        acceptedAt: null,
+        rejectedAt: null,
+        lockedAt: null,
       };
       S.quotes.push(q);
-      S.editingQuoteId = q.id;
-      S.tab = 'quotes';
-      log(jobId, q.id, 'Garage', 'CREATE', 'New quote started after inspection.', null, 0);
+      openBuilder(S, q.id);
+      log(
+        jobId,
+        q.id,
+        "Garage",
+        "CREATE",
+        "New quote started after inspection.",
+        null,
+        0,
+      );
       refresh();
     },
 
@@ -725,44 +1671,109 @@
       const job = sel.job(jobId);
       const budget = Math.round((Number(budgetDollars) || 0) * 100);
       const q = {
-        id: uid('q'), jobId, no: nextQuoteNo(job), type: 'STANDARD',
-        status: 'PENDING_GARAGE_APPROVAL', createdByRole: 'CUSTOMER',
-        parentQuoteId: null, originalInvoiceId: null,
-        items: [setLineTax({ id: uid('qi'), kind: 'SERVICE', description: description || 'Requested work', qty: 1, unitPrice: budget }, defaultTaxFor('SERVICE'))],
-        conditions: [{ id: uid('qc'), text: `Customer budget cap: ${money(budget)}.`, addedBy: 'CUSTOMER', at: nowISO() }],
-        revisions: [], hasDependency: false, isChangeOrder: false,
-        depositType: S.settings.depositType, depositValue: S.settings.depositValue,
-        expiryDate: addDays(nowISO(), 10), revision: 1,
-        createdAt: nowISO(), acceptedAt: null, rejectedAt: null, lockedAt: null,
+        id: uid("q"),
+        jobId,
+        no: nextQuoteNo(job),
+        type: "STANDARD",
+        status: "PENDING_GARAGE_APPROVAL",
+        createdByRole: "CUSTOMER",
+        parentQuoteId: null,
+        originalInvoiceId: null,
+        items: [
+          setLineTax(
+            {
+              id: uid("qi"),
+              kind: "SERVICE",
+              description: description || "Requested work",
+              qty: 1,
+              unitPrice: budget,
+            },
+            defaultTaxFor("SERVICE"),
+          ),
+        ],
+        conditions: [
+          {
+            id: uid("qc"),
+            text: `Customer budget cap: ${money(budget)}.`,
+            addedBy: "CUSTOMER",
+            at: nowISO(),
+          },
+        ],
+        revisions: [],
+        hasDependency: false,
+        isChangeOrder: false,
+        depositType: S.settings.depositType,
+        depositValue: S.settings.depositValue,
+        expiryDate: addDays(nowISO(), 10),
+        revision: 1,
+        createdAt: nowISO(),
+        acceptedAt: null,
+        rejectedAt: null,
+        lockedAt: null,
       };
-      q.revisions = [{ no: 1, total: quoteTotals(q).total, by: 'Customer', at: nowISO() }];
+      q.revisions = [
+        { no: 1, total: quoteTotals(q).total, by: "Customer", at: nowISO() },
+      ];
       S.quotes.push(q);
-      job.status = 'QUOTING';
-      log(jobId, q.id, 'Customer', 'CREATE', `Request for Quote submitted: ${description || 'requested work'}. Budget cap ${money(budget)}.`, null, budget);
-      toast('Request for Quote sent to the garage.', 'ok');
+      job.status = "QUOTING";
+      log(
+        jobId,
+        q.id,
+        "Customer",
+        "CREATE",
+        `Request for Quote submitted: ${description || "requested work"}. Budget cap ${money(budget)}.`,
+        null,
+        budget,
+      );
+      toast("Request for Quote sent to the garage.", "ok");
       refresh();
     },
 
     /* ---------- documents: proforma + invoice ---------- */
     generateProforma(jobId) {
       const built = buildLines(jobId);
-      if (!built.base) { toast('Accept a quote first.', 'warn'); return; }
+      if (!built.base) {
+        toast("Accept a quote first.", "warn");
+        return;
+      }
 
       const existing = sel.openProforma(jobId);
-      if (existing) { toast('A proforma is already open on this job.', 'warn'); return; }
+      if (existing) {
+        toast("A proforma is already open on this job.", "warn");
+        return;
+      }
 
       const doc = {
-        id: uid('inv'), jobId, quoteId: built.base.id, no: 'PRO-' + counters.pro++,
-        kind: 'PROFORMA', originalInvoiceId: null, settlementQuoteId: null, supersededBy: null,
+        id: uid("inv"),
+        jobId,
+        quoteId: built.base.id,
+        no: "PRO-" + counters.pro++,
+        kind: "PROFORMA",
+        originalInvoiceId: null,
+        settlementQuoteId: null,
+        supersededBy: null,
+        voidedAt: null,
+        voidReason: null,
+        seq: 1,
         lines: built.lines,
-        issuedAt: nowISO(), dueAt: addDays(nowISO(), 7),
-        depositRequired: depositFor(built.base), depositType: built.base.depositType, depositValue: built.base.depositValue,
+        issuedAt: nowISO(),
+        dueAt: addDays(nowISO(), 7),
+        depositRequired: depositFor(built.base),
+        depositType: built.base.depositType,
+        depositValue: built.base.depositValue,
       };
       S.invoices.push(doc);
       syncInvoice(doc);
-      log(jobId, built.base.id, 'Garage', 'PROFORMA_ISSUED',
-        `Proforma ${doc.no} issued for ${money(doc.total)} — not a tax invoice.`, null, doc.total);
-      toast(`Proforma ${doc.no} issued.`, 'ok');
+      log(
+        jobId,
+        built.base.id,
+        "Garage",
+        "PROFORMA_ISSUED",
+        `Proforma ${doc.no} issued for ${money(doc.total)} — not a tax invoice.`,
+        null,
+        doc.total,
+      );
+      toast(`Proforma ${doc.no} issued.`, "ok");
       refresh();
     },
 
@@ -770,40 +1781,87 @@
       const job = sel.job(jobId);
 
       /* Warranty jobs produce their own zero-dollar invoice */
-      const warranty = sel.quotesForJob(jobId).find((q) => q.type === 'WARRANTY' && q.status === 'ACCEPTED' && !q.invoicedAt);
+      const warranty = sel
+        .quotesForJob(jobId)
+        .find(
+          (q) =>
+            q.type === "WARRANTY" && q.status === "ACCEPTED" && !q.invoicedAt,
+        );
       if (warranty) {
         const doc = {
-          id: uid('inv'), jobId, quoteId: warranty.id, no: 'INV-' + counters.inv++,
-          kind: 'WARRANTY', originalInvoiceId: warranty.originalInvoiceId, settlementQuoteId: null, supersededBy: null,
+          id: uid("inv"),
+          jobId,
+          quoteId: warranty.id,
+          no: "INV-" + counters.inv++,
+          kind: "WARRANTY",
+          originalInvoiceId: warranty.originalInvoiceId,
+          settlementQuoteId: null,
+          supersedes: null,
+          supersededBy: null,
+          voidedAt: null,
+          voidReason: null,
+          seq: 1,
+          paymentId: null,
           lines: linesFromQuote(warranty, false),
-          issuedAt: nowISO(), dueAt: addDays(nowISO(), 14),
-          depositRequired: 0, depositType: 'NONE', depositValue: 0,
+          issuedAt: nowISO(),
+          dueAt: addDays(nowISO(), 14),
+          depositRequired: 0,
+          depositType: "NONE",
+          depositValue: 0,
         };
         S.invoices.push(doc);
         syncInvoice(doc);
         warranty.invoicedAt = nowISO();
-        log(jobId, warranty.id, 'System', 'INVOICE_ISSUED',
-          `Warranty invoice ${doc.no} issued at $0.00 against ${(sel.invoice(warranty.originalInvoiceId) || {}).no || 'original invoice'}.`, null, 0);
-        toast(`Warranty invoice ${doc.no} issued at $0.00.`, 'ok');
+        log(
+          jobId,
+          warranty.id,
+          "System",
+          "INVOICE_ISSUED",
+          `Warranty invoice ${doc.no} issued at $0.00 against ${(sel.invoice(warranty.originalInvoiceId) || {}).no || "original invoice"}.`,
+          null,
+          0,
+        );
+        toast(`Warranty invoice ${doc.no} issued at $0.00.`, "ok");
         refresh();
         return;
       }
 
       const built = buildLines(jobId);
-      if (!built.base) { toast('Accept a quote first.', 'warn'); return; }
+      if (!built.base) {
+        toast("Accept a quote first.", "warn");
+        return;
+      }
 
       let inv = sel.stdInvoice(jobId);
       const isNew = !inv;
 
+      /* A brand-new invoice continues the chain when an older version was voided. */
+      const versions = sel.invoiceVersions(jobId);
+      const lastVersion = versions.length
+        ? versions[versions.length - 1]
+        : null;
+
       if (isNew) {
         inv = {
-          id: uid('inv'), jobId, quoteId: built.base.id, no: 'INV-' + counters.inv++,
-          kind: 'TAX_INVOICE', originalInvoiceId: null,
-          settlementQuoteId: built.settlement ? built.settlement.id : null, supersededBy: null,
+          id: uid("inv"),
+          jobId,
+          quoteId: built.base.id,
+          no: "INV-" + counters.inv++,
+          kind: "TAX_INVOICE",
+          originalInvoiceId: null,
+          settlementQuoteId: built.settlement ? built.settlement.id : null,
+          supersedes: lastVersion ? lastVersion.id : null,
+          supersededBy: null,
+          voidedAt: null,
+          voidReason: null,
+          seq: lastVersion ? (lastVersion.seq || 1) + 1 : 1,
+          paymentId: null,
           lines: built.lines,
-          issuedAt: nowISO(), dueAt: addDays(nowISO(), 14),
+          issuedAt: nowISO(),
+          dueAt: addDays(nowISO(), 14),
           depositRequired: depositFor(built.base),
-          depositType: built.base.depositType, depositValue: built.base.depositValue,
+          depositType: built.base.depositType,
+          depositValue: built.base.depositValue,
         };
         S.invoices.push(inv);
         syncInvoice(inv);
@@ -811,31 +1869,129 @@
         /* the proforma is replaced by the real thing */
         const pro = sel.openProforma(jobId);
         if (pro) {
-          pro.status = 'SUPERSEDED';
+          pro.status = "SUPERSEDED";
           pro.supersededBy = inv.id;
           syncInvoice(pro);
         }
-        log(jobId, built.base.id, 'Garage', 'INVOICE_ISSUED',
-          `Invoice ${inv.no} generated from accepted quote${built.addons.length ? ' + ' + built.addons.length + ' add-on(s)' : ''}.`, null, inv.total);
+        log(
+          jobId,
+          built.base.id,
+          "Garage",
+          "INVOICE_ISSUED",
+          `Invoice ${inv.no} generated from accepted quote${built.addons.length ? " + " + built.addons.length + " add-on(s)" : ""}.`,
+          null,
+          inv.total,
+        );
       } else {
         inv.lines = built.lines;
         if (built.settlement) inv.settlementQuoteId = built.settlement.id;
         syncInvoice(inv);
-        log(jobId, null, 'Garage', 'INVOICE_UPDATED',
-          `Invoice ${inv.no} regenerated from accepted work — now ${money(inv.total)}.`, null, inv.total);
+        log(
+          jobId,
+          null,
+          "Garage",
+          "INVOICE_UPDATED",
+          `Invoice ${inv.no} regenerated from accepted work — now ${money(inv.total)}.`,
+          null,
+          inv.total,
+        );
       }
 
-      if (job.status === 'AWAITING_INVOICE') {
-        job.status = inv.depositRequired > 0 && inv.amountPaid < inv.depositRequired
-          ? 'AWAITING_DEPOSIT'
-          : 'IN_PROGRESS';
-        job.pausedReason = job.status === 'AWAITING_DEPOSIT' ? 'Deposit required before work begins.' : null;
-        if (job.status === 'IN_PROGRESS') {
-          log(jobId, null, 'System', 'WORK_STARTED', 'Invoice issued — work can proceed.', null, null);
+      if (job.status === "AWAITING_INVOICE") {
+        job.status =
+          inv.depositRequired > 0 && inv.amountPaid < inv.depositRequired
+            ? "AWAITING_DEPOSIT"
+            : "IN_PROGRESS";
+        job.pausedReason =
+          job.status === "AWAITING_DEPOSIT"
+            ? "Deposit required before work begins."
+            : null;
+        if (job.status === "IN_PROGRESS") {
+          log(
+            jobId,
+            null,
+            "System",
+            "WORK_STARTED",
+            "Invoice issued — work can proceed.",
+            null,
+            null,
+          );
         }
       }
 
-      toast(isNew ? `Invoice ${inv.no} generated.` : `Invoice ${inv.no} updated.`, 'ok');
+      toast(
+        isNew ? `Invoice ${inv.no} generated.` : `Invoice ${inv.no} updated.`,
+        "ok",
+      );
+      refresh();
+    },
+
+    /* ---------- voiding a document ---------- */
+    /*
+       Manual void = "this document was wrong from the start".
+       Allowed only while nothing has been paid on it. Once money has moved the
+       document is not wrong, it is merely out of date — that is what the
+       automatic reissue on payment exists for. Voiding never deletes the row.
+    */
+    voidInvoice(invoiceId, reason) {
+      const inv = sel.invoice(invoiceId);
+      if (!inv) return;
+      if (inv.kind !== "TAX_INVOICE") {
+        toast("Only a tax invoice can be voided.", "warn");
+        return;
+      }
+      if (inv.status === "VOID") return;
+      if (inv.amountPaid > 0) {
+        toast(
+          "This invoice carries payments — a paid document is replaced by a new version, never voided.",
+          "warn",
+        );
+        return;
+      }
+
+      const text = (reason || "").trim() || "Voided by the garage.";
+      inv.status = "VOID";
+      inv.voidedAt = nowISO();
+      inv.voidReason = text;
+      inv.supersededBy = null; // voided outright, not replaced by anything
+
+      /* Voiding receipts that belonged to this document (defensive: none once paid). */
+      S.receipts
+        .filter((r) => r.invoiceId === inv.id && r.status === "VALID")
+        .forEach((r) => {
+          r.status = "VOID";
+          r.voidedAt = nowISO();
+        });
+
+      /* No live version is left, so the job has nothing payable again. */
+      const job = sel.job(inv.jobId);
+      if (!sel.stdInvoice(inv.jobId)) {
+        job.status = "AWAITING_INVOICE";
+        job.pausedReason = `Invoice ${inv.no} was voided — issue a replacement before collecting payment.`;
+        log(
+          inv.jobId,
+          null,
+          "System",
+          "AWAITING_INVOICE",
+          "No live invoice left on this job — the garage must issue a replacement.",
+          null,
+          null,
+        );
+      }
+
+      log(
+        inv.jobId,
+        null,
+        "Garage",
+        "INVOICE_VOIDED",
+        `${inv.no} voided by the garage. Reason: ${text}`,
+        inv.total,
+        null,
+      );
+      toast(
+        `${inv.no} voided — issue a replacement to collect payment.`,
+        "warn",
+      );
       refresh();
     },
 
@@ -843,15 +1999,37 @@
     requestCancellation(jobId, reason) {
       const job = sel.job(jobId);
       S.cancellations.push({
-        id: uid('can'), jobId, reason: reason || 'No reason given.',
-        status: 'REQUESTED', requestedBy: 'Customer',
-        settlementQuoteId: null, createdAt: nowISO(), resolvedAt: null,
+        id: uid("can"),
+        jobId,
+        reason: reason || "No reason given.",
+        status: "REQUESTED",
+        requestedBy: "Customer",
+        settlementQuoteId: null,
+        createdAt: nowISO(),
+        resolvedAt: null,
       });
-      job.status = 'PAUSED_PENDING_CANCELLATION';
-      job.pausedReason = 'Customer requested cancellation — awaiting settlement.';
-      log(jobId, null, 'Customer', 'CANCEL_REQUEST', reason || 'Cancellation requested.', null, null);
-      log(jobId, null, 'System', 'JOB_PAUSED', 'Job auto-paused pending cancellation settlement.', null, null);
-      toast('Cancellation requested — job paused, garage notified.', 'warn');
+      job.status = "PAUSED_PENDING_CANCELLATION";
+      job.pausedReason =
+        "Customer requested cancellation — awaiting settlement.";
+      log(
+        jobId,
+        null,
+        "Customer",
+        "CANCEL_REQUEST",
+        reason || "Cancellation requested.",
+        null,
+        null,
+      );
+      log(
+        jobId,
+        null,
+        "System",
+        "JOB_PAUSED",
+        "Job auto-paused pending cancellation settlement.",
+        null,
+        null,
+      );
+      toast("Cancellation requested — job paused, garage notified.", "warn");
       refresh();
     },
 
@@ -865,95 +2043,322 @@
 
       const items = [];
       if (hours > 0) {
-        items.push(setLineTax({ id: uid('qi'), kind: 'LABOR', description: `Labour completed to date (${hours}h, prorated)`, qty: hours, unitPrice: 9500 }, defaultTaxFor('LABOR')));
+        items.push(
+          setLineTax(
+            {
+              id: uid("qi"),
+              kind: "LABOR",
+              description: `Labour completed to date (${hours}h, prorated)`,
+              qty: hours,
+              unitPrice: 9500,
+            },
+            defaultTaxFor("LABOR"),
+          ),
+        );
       }
       if (orig) {
-        orig.items.filter((i) => i.kind === 'PART').forEach((p) =>
-          items.push(setLineTax({ id: uid('qi'), kind: 'PART', description: `${p.description} (already installed)`, qty: p.qty, unitPrice: p.unitPrice }, taxById(p.taxId) || defaultTaxFor('PART'))));
+        orig.items
+          .filter((i) => i.kind === "PART")
+          .forEach((p) =>
+            items.push(
+              setLineTax(
+                {
+                  id: uid("qi"),
+                  kind: "PART",
+                  description: `${p.description} (already installed)`,
+                  qty: p.qty,
+                  unitPrice: p.unitPrice,
+                },
+                taxById(p.taxId) || defaultTaxFor("PART"),
+              ),
+            ),
+          );
 
         const pkg = orig.items.filter((i) => i.packageRef);
         if (pkg.length) {
-          pkg.forEach((p) => items.push(setLineTax({
-            id: uid('qi'), kind: 'SERVICE',
-            description: unbundle ? `${p.description} — unbundled, standard rate` : `${p.description} (package rate)`,
-            qty: p.qty,
-            unitPrice: unbundle ? (p.standaloneUnitPrice || p.unitPrice) : p.unitPrice,
-          }, taxById(p.taxId) || defaultTaxFor('SERVICE'))));
+          pkg.forEach((p) =>
+            items.push(
+              setLineTax(
+                {
+                  id: uid("qi"),
+                  kind: "SERVICE",
+                  description: unbundle
+                    ? `${p.description} — unbundled, standard rate`
+                    : `${p.description} (package rate)`,
+                  qty: p.qty,
+                  unitPrice: unbundle
+                    ? p.standaloneUnitPrice || p.unitPrice
+                    : p.unitPrice,
+                },
+                taxById(p.taxId) || defaultTaxFor("SERVICE"),
+              ),
+            ),
+          );
         }
       }
       if (restock > 0) {
-        items.push(setLineTax({ id: uid('qi'), kind: 'RESTOCKING_FEE', description: 'Restocking fee — special-order parts returned to supplier', qty: 1, unitPrice: restock }, null));
+        items.push(
+          setLineTax(
+            {
+              id: uid("qi"),
+              kind: "RESTOCKING_FEE",
+              description:
+                "Restocking fee — special-order parts returned to supplier",
+              qty: 1,
+              unitPrice: restock,
+            },
+            null,
+          ),
+        );
       }
 
       const q = {
-        id: uid('q'), jobId, no: nextQuoteNo(job), type: 'SETTLEMENT',
-        status: 'PENDING_CUSTOMER_APPROVAL', createdByRole: 'GARAGE',
-        parentQuoteId: orig ? orig.id : null, originalInvoiceId: null,
+        id: uid("q"),
+        jobId,
+        no: nextQuoteNo(job),
+        type: "SETTLEMENT",
+        status: "PENDING_CUSTOMER_APPROVAL",
+        createdByRole: "GARAGE",
+        parentQuoteId: orig ? orig.id : null,
+        originalInvoiceId: null,
         items,
-        conditions: [{ id: uid('qc'), text: 'Settlement figure covers work completed up to the cancellation time only.', addedBy: 'GARAGE', at: nowISO() }],
-        revisions: [], hasDependency: false, isChangeOrder: false,
-        depositType: 'NONE', depositValue: 0,
-        expiryDate: addDays(nowISO(), 7), revision: 1,
-        createdAt: nowISO(), acceptedAt: null, rejectedAt: null, lockedAt: null,
+        conditions: [
+          {
+            id: uid("qc"),
+            text: "Settlement figure covers work completed up to the cancellation time only.",
+            addedBy: "GARAGE",
+            at: nowISO(),
+          },
+        ],
+        revisions: [],
+        hasDependency: false,
+        isChangeOrder: false,
+        depositType: "NONE",
+        depositValue: 0,
+        expiryDate: addDays(nowISO(), 7),
+        revision: 1,
+        createdAt: nowISO(),
+        acceptedAt: null,
+        rejectedAt: null,
+        lockedAt: null,
       };
-      q.revisions = [{ no: 1, total: quoteTotals(q).total, by: 'Garage', at: nowISO() }];
+      q.revisions = [
+        { no: 1, total: quoteTotals(q).total, by: "Garage", at: nowISO() },
+      ];
       S.quotes.push(q);
 
-      if (c) { c.status = 'SETTLEMENT_SENT'; c.settlementQuoteId = q.id; }
+      if (c) {
+        c.status = "SETTLEMENT_SENT";
+        c.settlementQuoteId = q.id;
+      }
 
-      log(jobId, q.id, 'Garage', 'SETTLE',
-        `Settlement quote ${q.no} issued${unbundle ? ' (package unbundled at standard rates)' : ''}.`, null, quoteTotals(q).total);
-      toast('Settlement quote sent to the customer.', 'ok');
+      log(
+        jobId,
+        q.id,
+        "Garage",
+        "SETTLE",
+        `Settlement quote ${q.no} issued${unbundle ? " (package unbundled at standard rates)" : ""}.`,
+        null,
+        quoteTotals(q).total,
+      );
+      toast("Settlement quote sent to the customer.", "ok");
       refresh();
     },
 
     declineCancellation(jobId) {
       const c = sel.openCancellation(jobId);
-      if (c) { c.status = 'DECLINED'; c.resolvedAt = nowISO(); }
+      if (c) {
+        c.status = "DECLINED";
+        c.resolvedAt = nowISO();
+      }
       const job = sel.job(jobId);
-      job.status = 'IN_PROGRESS';
+      job.status = "IN_PROGRESS";
       job.pausedReason = null;
-      log(jobId, null, 'Garage', 'CANCEL_DECLINED', 'Garage declined the cancellation request; work resumed.', null, null);
-      toast('Cancellation declined — job resumed.', 'warn');
+      log(
+        jobId,
+        null,
+        "Garage",
+        "CANCEL_DECLINED",
+        "Garage declined the cancellation request; work resumed.",
+        null,
+        null,
+      );
+      toast("Cancellation declined — job resumed.", "warn");
       refresh();
     },
 
     /* ---------- payments ---------- */
     recordPayment(invoiceId, amountCents, type, method) {
       const inv = sel.invoice(invoiceId);
-      if (!inv || inv.kind !== 'TAX_INVOICE') { toast('Payments can only be taken against a tax invoice.', 'warn'); return; }
+      if (!inv || inv.kind !== "TAX_INVOICE") {
+        toast("Payments can only be taken against a tax invoice.", "warn");
+        return;
+      }
+      if (inv.status === "VOID") {
+        toast(
+          "That invoice is void — collect against the current one.",
+          "warn",
+        );
+        return;
+      }
 
-      const amount = Math.max(0, Math.min(Math.round(amountCents), inv.balance));
-      if (!amount) { toast('Nothing left to pay on this invoice.', 'warn'); return; }
+      const amount = Math.max(
+        0,
+        Math.min(Math.round(amountCents), inv.balance),
+      );
+      if (!amount) {
+        toast("Nothing left to pay on this invoice.", "warn");
+        return;
+      }
+
+      const job = sel.job(inv.jobId);
+      const reissue = !!S.settings.reissueInvoiceOnPayment;
 
       const p = {
-        id: uid('pay'), invoiceId, no: 'PAY-' + counters.pay++,
-        amount, type: type || 'STANDARD', method: method || 'CARD',
-        status: 'SUCCEEDED', paidAt: nowISO(),
+        id: uid("pay"),
+        invoiceId,
+        no: "PAY-" + counters.pay++,
+        amount,
+        type: type || "STANDARD",
+        method: method || "CARD",
+        status: "SUCCEEDED",
+        paidAt: nowISO(),
       };
       S.payments.push(p);
 
-      S.receipts.push({
-        id: uid('rec'), paymentId: p.id, no: 'RCP-' + counters.rec++,
-        issuedAt: nowISO(), emailedTo: sel.job(inv.jobId).customerEmail,
+      let current = inv;
+
+      if (reissue) {
+        /* 1. issue the replacement first — it needs the new document number */
+        current = {
+          id: uid("inv"),
+          jobId: inv.jobId,
+          quoteId: inv.quoteId,
+          no: "INV-" + counters.inv++,
+          kind: "TAX_INVOICE",
+          originalInvoiceId: inv.originalInvoiceId || null,
+          settlementQuoteId: inv.settlementQuoteId || null,
+          supersedes: inv.id,
+          supersededBy: null,
+          voidedAt: null,
+          voidReason: null,
+          seq: (inv.seq || 1) + 1,
+          paymentId: p.id,
+          lines: inv.lines.map((l) => Object.assign({}, l, { id: uid("ln") })),
+          issuedAt: nowISO(),
+          dueAt: inv.dueAt,
+          depositRequired: inv.depositRequired,
+          depositType: inv.depositType,
+          depositValue: inv.depositValue,
+          status: "UNPAID",
+        };
+        S.invoices.push(current);
+        syncInvoice(current);
+
+        /* 2. void the previous version and point it at its replacement */
+        inv.status = "VOID";
+        inv.voidedAt = nowISO();
+        inv.voidReason = "Superseded by " + current.no;
+        inv.supersededBy = current.id;
+
+        log(
+          inv.jobId,
+          null,
+          "System",
+          "INVOICE_VOIDED",
+          `${inv.no} voided — replaced by ${current.no} after payment ${p.no}.`,
+          inv.total,
+          null,
+        );
+      } else {
+        syncInvoice(inv);
+      }
+
+      /* 3. one valid receipt per job: the new one voids the previous */
+      const previousReceipts = reissue
+        ? S.receipts.filter(
+            (r) => r.jobId === inv.jobId && r.status === "VALID",
+          )
+        : [];
+
+      const rc = {
+        id: uid("rec"),
+        paymentId: p.id,
+        invoiceId: current.id,
+        jobId: inv.jobId,
+        no: "RCP-" + counters.rec++,
+        status: "VALID",
+        issuedAt: nowISO(),
+        emailedTo: job.customerEmail,
+        paidToDate: current.amountPaid,
+        balanceAfter: current.balance,
+        supersededBy: null,
+        voidedAt: null,
+      };
+      S.receipts.push(rc);
+
+      previousReceipts.forEach((r) => {
+        r.status = "VOID";
+        r.voidedAt = nowISO();
+        r.supersededBy = rc.id;
       });
 
-      syncInvoice(inv);
-
-      const job = sel.job(inv.jobId);
-      if (job.status === 'AWAITING_DEPOSIT' && inv.amountPaid >= inv.depositRequired) {
-        job.status = 'IN_PROGRESS';
+      if (
+        job.status === "AWAITING_DEPOSIT" &&
+        current.amountPaid >= current.depositRequired
+      ) {
+        job.status = "IN_PROGRESS";
         job.pausedReason = null;
-        log(job.id, null, 'System', 'WORK_STARTED', 'Deposit received — work commenced.', null, null);
+        log(
+          job.id,
+          null,
+          "System",
+          "WORK_STARTED",
+          "Deposit received — work commenced.",
+          null,
+          null,
+        );
       }
-      if (inv.balance === 0) {
-        log(job.id, null, 'System', 'HOLD_RELEASED', 'Balance cleared — Vehicle Hold removed. Keys may be released.', null, null);
+      if (current.balance === 0) {
+        log(
+          job.id,
+          null,
+          "System",
+          "HOLD_RELEASED",
+          "Balance cleared — Vehicle Hold removed. Keys may be released.",
+          null,
+          null,
+        );
       }
 
-      const rc = sel.receiptForPayment(p.id);
-      log(inv.jobId, null, 'System', 'PAYMENT_RECEIVED',
-        `${p.no} · ${money(amount)} (${type}). Receipt ${rc.no} emailed to ${rc.emailedTo}.`, null, amount);
-      toast(`Payment recorded — receipt ${rc.no} emailed.`, 'ok');
+      log(
+        inv.jobId,
+        null,
+        "System",
+        "PAYMENT_RECEIVED",
+        `${p.no} · ${money(amount)} (${type}). Receipt ${rc.no} emailed to ${rc.emailedTo}.`,
+        null,
+        amount,
+      );
+
+      if (reissue) {
+        log(
+          inv.jobId,
+          null,
+          "System",
+          "INVOICE_REISSUED",
+          `${current.no} issued for ${money(current.total)} — paid ${money(current.amountPaid)}, balance ${money(current.balance)}.`,
+          null,
+          current.total,
+        );
+      }
+
+      toast(
+        reissue
+          ? `Payment recorded — ${current.no} issued, receipt ${rc.no} emailed.`
+          : `Payment recorded — receipt ${rc.no} emailed.`,
+        "ok",
+      );
       refresh();
     },
 
@@ -962,22 +2367,45 @@
       const p = sel.payment(paymentId);
       const inv = sel.invoice(p.invoiceId);
       const already = S.refunds
-        .filter((r) => r.paymentId === paymentId && ['REQUESTED', 'PROCESSING', 'COMPLETED'].includes(r.status))
+        .filter(
+          (r) =>
+            r.paymentId === paymentId &&
+            ["REQUESTED", "PROCESSING", "COMPLETED"].includes(r.status),
+        )
         .reduce((s, r) => s + r.amount, 0);
-      const amount = Math.max(0, Math.min(Math.round(amountCents), p.amount - already));
-      if (!amount) { toast('This payment has no refundable amount left.', 'warn'); return; }
+      const amount = Math.max(
+        0,
+        Math.min(Math.round(amountCents), p.amount - already),
+      );
+      if (!amount) {
+        toast("This payment has no refundable amount left.", "warn");
+        return;
+      }
 
       const r = {
-        id: uid('ref'), invoiceId: p.invoiceId, paymentId, amount,
-        type: amount >= p.amount ? 'FULL' : 'PARTIAL',
-        reason: reason || 'Not specified',
-        status: 'REQUESTED', requestedBy: 'Customer',
-        createdAt: nowISO(), decidedAt: null, creditNoteId: null,
+        id: uid("ref"),
+        invoiceId: p.invoiceId,
+        paymentId,
+        amount,
+        type: amount >= p.amount ? "FULL" : "PARTIAL",
+        reason: reason || "Not specified",
+        status: "REQUESTED",
+        requestedBy: "Customer",
+        createdAt: nowISO(),
+        decidedAt: null,
+        creditNoteId: null,
       };
       S.refunds.push(r);
-      log(inv.jobId, null, 'Customer', 'REFUND_REQUEST',
-        `${r.type} refund of ${money(amount)} requested against ${p.no}. Reason: ${r.reason}`, null, amount);
-      toast('Refund requested — garage must approve.', 'warn');
+      log(
+        inv.jobId,
+        null,
+        "Customer",
+        "REFUND_REQUEST",
+        `${r.type} refund of ${money(amount)} requested against ${p.no}. Reason: ${r.reason}`,
+        null,
+        amount,
+      );
+      toast("Refund requested — garage must approve.", "warn");
       refresh();
     },
 
@@ -986,13 +2414,29 @@
       const inv = sel.invoice(r.invoiceId);
       r.decidedAt = nowISO();
       if (approve) {
-        r.status = 'PROCESSING';
-        log(inv.jobId, null, 'Garage', 'REFUND_APPROVED', `${money(r.amount)} refund approved — processing.`, null, r.amount);
-        toast('Refund approved — now processing.', 'ok');
+        r.status = "PROCESSING";
+        log(
+          inv.jobId,
+          null,
+          "Garage",
+          "REFUND_APPROVED",
+          `${money(r.amount)} refund approved — processing.`,
+          null,
+          r.amount,
+        );
+        toast("Refund approved — now processing.", "ok");
       } else {
-        r.status = 'DECLINED';
-        log(inv.jobId, null, 'Garage', 'REFUND_DECLINED', 'Refund request declined.', null, r.amount);
-        toast('Refund declined.', 'danger');
+        r.status = "DECLINED";
+        log(
+          inv.jobId,
+          null,
+          "Garage",
+          "REFUND_DECLINED",
+          "Refund request declined.",
+          null,
+          r.amount,
+        );
+        toast("Refund declined.", "danger");
       }
       refresh();
     },
@@ -1003,14 +2447,28 @@
       const amount = Math.max(0, Math.min(Math.round(amountCents), p.amount));
       if (!amount) return;
       const r = {
-        id: uid('ref'), invoiceId: p.invoiceId, paymentId, amount,
-        type: amount >= p.amount ? 'FULL' : 'PARTIAL',
-        reason: reason || 'Issued by garage',
-        status: 'COMPLETED', requestedBy: 'Garage',
-        createdAt: nowISO(), decidedAt: nowISO(), creditNoteId: null,
+        id: uid("ref"),
+        invoiceId: p.invoiceId,
+        paymentId,
+        amount,
+        type: amount >= p.amount ? "FULL" : "PARTIAL",
+        reason: reason || "Issued by garage",
+        status: "COMPLETED",
+        requestedBy: "Garage",
+        createdAt: nowISO(),
+        decidedAt: nowISO(),
+        creditNoteId: null,
       };
       S.refunds.push(r);
-      log(inv.jobId, null, 'Garage', 'REFUND_ISSUED', `${r.type} refund of ${money(amount)} issued proactively against ${p.no}.`, null, amount);
+      log(
+        inv.jobId,
+        null,
+        "Garage",
+        "REFUND_ISSUED",
+        `${r.type} refund of ${money(amount)} issued proactively against ${p.no}.`,
+        null,
+        amount,
+      );
       completeRefundRecord(r);
       refresh();
     },
@@ -1023,18 +2481,46 @@
     /* ---------- storage fee ---------- */
     addStorageFee(jobId, days) {
       const inv = sel.stdInvoice(jobId);
-      if (!inv) { toast('Generate the invoice first — fees are billed on it.', 'warn'); return; }
+      if (!inv) {
+        toast("Generate the invoice first — fees are billed on it.", "warn");
+        return;
+      }
       const n = Math.max(1, Number(days) || 1);
       const rate = S.settings.storageDailyRate;
-      inv.lines.push(setLineTax({
-        id: uid('ln'), quoteId: null, quoteType: 'FEE',
-        description: `Daily storage fee (${n} day${n > 1 ? 's' : ''} @ ${money(rate)}/day)`,
-        qty: n, unitPrice: rate, isAddon: false,
-      }, null));
+      inv.lines.push(
+        setLineTax(
+          {
+            id: uid("ln"),
+            quoteId: null,
+            quoteType: "FEE",
+            description: `Daily storage fee (${n} day${n > 1 ? "s" : ""} @ ${money(rate)}/day)`,
+            qty: n,
+            unitPrice: rate,
+            isAddon: false,
+          },
+          null,
+        ),
+      );
       syncInvoice(inv);
-      S.storage.push({ id: uid('st'), jobId, invoiceId: inv.id, days: n, rate, amount: n * rate, at: nowISO() });
-      log(jobId, null, 'Garage', 'STORAGE_FEE', `${n} day(s) of storage added to ${inv.no} — ${money(n * rate)}.`, null, n * rate);
-      toast(`Storage fee added to ${inv.no}.`, 'ok');
+      S.storage.push({
+        id: uid("st"),
+        jobId,
+        invoiceId: inv.id,
+        days: n,
+        rate,
+        amount: n * rate,
+        at: nowISO(),
+      });
+      log(
+        jobId,
+        null,
+        "Garage",
+        "STORAGE_FEE",
+        `${n} day(s) of storage added to ${inv.no} — ${money(n * rate)}.`,
+        null,
+        n * rate,
+      );
+      toast(`Storage fee added to ${inv.no}.`, "ok");
       refresh();
     },
 
@@ -1042,38 +2528,74 @@
        TAX MANAGEMENT
        ===================================================== */
     saveTax(payload) {
-      const value = payload.kind === 'PERCENT'
-        ? Math.round(Number(payload.value) * 100)   // 8.00 -> 800
-        : Math.round(Number(payload.value) * 100);  // $5.00 -> 500
+      const value =
+        payload.kind === "PERCENT"
+          ? Math.round(Number(payload.value) * 100) // 8.00 -> 800
+          : Math.round(Number(payload.value) * 100); // $5.00 -> 500
 
       if (payload.id) {
         /* editing an active rate creates a NEW VERSION, never mutates history */
         const old = taxById(payload.id);
         if (!old) return;
-        const newId = uid('tax');
+        const newId = uid("tax");
         old.active = false;
         old.effectiveTo = nowISO();
         old.supersededBy = newId;
         S.taxes.push({
-          id: newId, code: old.code, name: payload.name || old.name,
-          kind: payload.kind, value, inclusive: !!payload.inclusive,
-          appliesTo: payload.appliesTo || [], effectiveFrom: nowISO(),
-          effectiveTo: null, active: true, supersededBy: null,
+          id: newId,
+          code: old.code,
+          name: payload.name || old.name,
+          kind: payload.kind,
+          value,
+          inclusive: !!payload.inclusive,
+          appliesTo: payload.appliesTo || [],
+          effectiveFrom: nowISO(),
+          effectiveTo: null,
+          active: true,
+          supersededBy: null,
         });
-        log(S.jobId, null, 'Garage', 'TAX_VERSION',
-          `${old.code} re-rated to ${payload.kind === 'PERCENT' ? (value / 100).toFixed(2) + '%' : money(value) + '/unit'}. Old rate kept for existing documents.`, null, null);
-        toast(`${old.code} updated — existing documents keep the old rate.`, 'ok');
+        log(
+          S.jobId,
+          null,
+          "Garage",
+          "TAX_VERSION",
+          `${old.code} re-rated to ${payload.kind === "PERCENT" ? (value / 100).toFixed(2) + "%" : money(value) + "/unit"}. Old rate kept for existing documents.`,
+          null,
+          null,
+        );
+        toast(
+          `${old.code} updated — existing documents keep the old rate.`,
+          "ok",
+        );
       } else {
-        const code = (payload.code || '').trim().toUpperCase();
-        if (!code) { toast('A tax code is required.', 'warn'); return; }
+        const code = (payload.code || "").trim().toUpperCase();
+        if (!code) {
+          toast("A tax code is required.", "warn");
+          return;
+        }
         S.taxes.push({
-          id: uid('tax'), code, name: payload.name || code,
-          kind: payload.kind, value, inclusive: !!payload.inclusive,
-          appliesTo: payload.appliesTo || [], effectiveFrom: nowISO(),
-          effectiveTo: null, active: true, supersededBy: null,
+          id: uid("tax"),
+          code,
+          name: payload.name || code,
+          kind: payload.kind,
+          value,
+          inclusive: !!payload.inclusive,
+          appliesTo: payload.appliesTo || [],
+          effectiveFrom: nowISO(),
+          effectiveTo: null,
+          active: true,
+          supersededBy: null,
         });
-        log(S.jobId, null, 'Garage', 'TAX_CREATED', `Tax ${code} created.`, null, null);
-        toast(`Tax ${code} created.`, 'ok');
+        log(
+          S.jobId,
+          null,
+          "Garage",
+          "TAX_CREATED",
+          `Tax ${code} created.`,
+          null,
+          null,
+        );
+        toast(`Tax ${code} created.`, "ok");
       }
       refresh();
     },
@@ -1083,8 +2605,16 @@
       if (!t) return;
       t.active = false;
       t.effectiveTo = nowISO();
-      log(S.jobId, null, 'Garage', 'TAX_DEACTIVATED', `Tax ${t.code} deactivated — not offered on new lines.`, null, null);
-      toast(`Tax ${t.code} deactivated.`, 'ok');
+      log(
+        S.jobId,
+        null,
+        "Garage",
+        "TAX_DEACTIVATED",
+        `Tax ${t.code} deactivated — not offered on new lines.`,
+        null,
+        null,
+      );
+      toast(`Tax ${t.code} deactivated.`, "ok");
       refresh();
     },
 
@@ -1097,51 +2627,68 @@
         const svc = sel.service(payload.id);
         if (!svc) return;
         svc.name = payload.name;
-        svc.category = payload.category || 'General';
+        svc.category = payload.category || "General";
         svc.price = price;
         svc.taxCode = payload.taxCode;
-        toast('Service updated.', 'ok');
+        toast("Service updated.", "ok");
       } else {
         S.services.push({
-          id: uid('svc'), name: payload.name,
-          category: payload.category || 'General',
-          price, taxCode: payload.taxCode, unit: 'job',
+          id: uid("svc"),
+          name: payload.name,
+          category: payload.category || "General",
+          price,
+          taxCode: payload.taxCode,
+          unit: "job",
         });
-        toast('Service added to the catalog.', 'ok');
+        toast("Service added to the catalog.", "ok");
       }
       refresh();
     },
 
     removeService(serviceId) {
       S.services = S.services.filter((s) => s.id !== serviceId);
-      toast('Service removed from the catalog.', 'warn');
+      toast("Service removed from the catalog.", "warn");
       refresh();
     },
   };
 
   function completeRefundRecord(r) {
-    const inv = sel.invoice(r.invoiceId);
+    const source = sel.invoice(r.invoiceId);
+    /* A credit note always lands on the live version, never on a void one. */
+    const inv = sel.stdInvoice(source.jobId) || source;
     const p = sel.payment(r.paymentId);
 
-    r.status = 'COMPLETED';
+    r.status = "COMPLETED";
 
     const cn = {
-      id: uid('cn'), invoiceId: inv.id, refundId: r.id,
-      no: 'CN-' + counters.cn++, amount: r.amount,
-      reason: r.reason, issuedAt: nowISO(),
+      id: uid("cn"),
+      invoiceId: inv.id,
+      refundId: r.id,
+      no: "CN-" + counters.cn++,
+      amount: r.amount,
+      reason: r.reason,
+      issuedAt: nowISO(),
     };
     S.creditNotes.push(cn);
     r.creditNoteId = cn.id;
 
     const refundedOnPayment = S.refunds
-      .filter((x) => x.paymentId === p.id && x.status === 'COMPLETED')
+      .filter((x) => x.paymentId === p.id && x.status === "COMPLETED")
       .reduce((s, x) => s + x.amount, 0);
-    p.status = refundedOnPayment >= p.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+    p.status =
+      refundedOnPayment >= p.amount ? "REFUNDED" : "PARTIALLY_REFUNDED";
 
     syncInvoice(inv);
-    log(inv.jobId, null, 'System', 'CREDIT_NOTE',
-      `Credit note ${cn.no} issued for ${money(r.amount)} against ${inv.no}. Payment ${p.no} now ${p.status.replace('_', ' ').toLowerCase()}.`, null, r.amount);
-    toast(`Refund completed — credit note ${cn.no} generated.`, 'ok');
+    log(
+      inv.jobId,
+      null,
+      "System",
+      "CREDIT_NOTE",
+      `Credit note ${cn.no} issued for ${money(r.amount)} against ${inv.no}. Payment ${p.no} now ${p.status.replace("_", " ").toLowerCase()}.`,
+      null,
+      r.amount,
+    );
+    toast(`Refund completed — credit note ${cn.no} generated.`, "ok");
   }
 
   /* =========================================================
@@ -1150,10 +2697,30 @@
   seed();
 
   global.Store = {
-    S, sel, money, fmtDateTime, fmtDay, uid, nowISO, addDays,
-    quoteTotals, docTotals, lineMath, lineTotal, depositFor, syncInvoice,
-    activeTaxes, taxById, taxByCode, defaultTaxFor, taxLabel, taxRateLabel, setLineTax,
-    buildLines, invoiceNeedsUpdate,
-    actions, seed,
+    S,
+    sel,
+    money,
+    fmtDateTime,
+    fmtDay,
+    uid,
+    nowISO,
+    addDays,
+    quoteTotals,
+    docTotals,
+    lineMath,
+    lineTotal,
+    depositFor,
+    syncInvoice,
+    activeTaxes,
+    taxById,
+    taxByCode,
+    defaultTaxFor,
+    taxLabel,
+    taxRateLabel,
+    setLineTax,
+    buildLines,
+    invoiceNeedsUpdate,
+    actions,
+    seed,
   };
 })(window);
