@@ -1014,12 +1014,6 @@
      ========================================================= */
   const actions = {
     /* ---------- navigation ---------- */
-    setRole(role) {
-      S.role = role;
-      S.screen = "job";
-      S.editingQuoteId = null;
-      refresh();
-    },
     setScreen(screen) {
       S.screen = screen;
       S.tab = "overview";

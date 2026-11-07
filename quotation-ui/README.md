@@ -11,16 +11,19 @@ Double-click `index.html`, or serve the folder:
 npx serve quotation-ui
 ```
 
-## Two actors, one set of records
+## One panel: the garage
 
-Use the **Viewing as** switch in the top bar. The same records change face:
+Everything is driven from the garage side. There is no customer login — the customer comes to the
+garage, the garage quotes, the garage records what the customer decided and takes the payment.
 
-|                 | Customer sees | Garage sees                    |
-| --------------- | ------------- | ------------------------------ |
-| Document screen | **Bill**      | **Invoice**                    |
-| Sidebar         | Jobs only     | Jobs · **Taxes** · **Catalog** |
+| Area            | Garage sees                    |
+| --------------- | ------------------------------ |
+| Document screen | **Invoice**                    |
+| Sidebar         | Jobs · **Taxes** · **Catalog** |
 
-The database row is always `Invoice`; only the label changes per viewer.
+Customer-facing statuses still mean exactly what they say: **Pending Customer Approval** = _"sent to the
+customer, waiting for their answer"_. When the customer says yes (in person, on the phone, by email) the
+garage clicks **Accept & lock**, and the audit trail records the decision and the time.
 
 ## Seed jobs
 
@@ -89,7 +92,6 @@ Garage → **Catalog**: dummy services grouped by category, each with a default 
 - **Create from scratch** — _Blank custom line_, or _Create new service…_ which adds it to the catalog **and** the quote in one step.
 - **Edit anything** — description, qty, price and tax per line; deposit type/value; conditions.
 - Search filters the catalog live (without losing focus), categories filter on click.
-- The customer keeps their lighter inline counter-offer editor — no catalog access.
 
 ### 3. Proforma, then a manually generated invoice
 
@@ -103,7 +105,7 @@ Quote ACCEPTED
       └─[Generate invoice]  → INV-5004  payable · balance · Vehicle Hold · refunds
 ```
 
-Try it on **JC-1042**: accept as customer, then flip to garage and open the **Invoice** tab.
+Try it on **JC-1042**: open the **Quotes** tab and click _Accept & lock_, then open the **Invoice** tab.
 
 Also: when an add-on is accepted mid-job, the invoice is flagged **"Accepted work not yet billed"** with an _Update invoice_ button — the garage decides when it hits the bill.
 
@@ -185,7 +187,9 @@ Everything below is enforced in `js/store.js`. The views only render what the en
 
 - Types: `STANDARD`, `SUPPLEMENTARY` (add-on), `SETTLEMENT`, `WARRANTY`.
 - Statuses: `DRAFT`, `PENDING_GARAGE_APPROVAL`, `PENDING_CUSTOMER_APPROVAL`, `ACCEPTED`, `REJECTED`.
-- **Turn-taking**: only the party whose turn it is can edit/counter/accept/reject. The garage edits in the full-screen **builder**; the customer keeps the lighter inline counter-offer editor.
+- **One actor, recorded decisions**: the garage edits, counters, accepts and rejects. A status of
+  `PENDING_CUSTOMER_APPROVAL` means the quote is out with the customer; the garage flips it to `ACCEPTED`
+  once the customer agrees, so every round is still logged with a timestamp.
 - Every save bumps `revision` and appends to `revisions[]`; the status flips to the _other_ party's approval.
 - **Accepting locks the quote** (`acceptedAt`, `lockedAt`) — but creates **no invoice**.
 - A `hasDependency` add-on pauses the job (`PAUSED_PENDING_APPROVAL`) until it is accepted (resume) or rejected (stay paused). Independent add-ons never block.

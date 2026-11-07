@@ -104,10 +104,12 @@
   const banner = (kind, icon, html) =>
     `<div class="banner banner--${kind}"><span class="banner__icon">${icon}</span><div>${html}</div></div>`;
 
+  /* One panel only: the garage records the customer's answer after they agree in
+     person/by phone, so every open quote is actionable from the garage side. */
   const isMyTurn = (q) =>
-    (q.status === "PENDING_CUSTOMER_APPROVAL" && S.role === "customer") ||
-    (q.status === "PENDING_GARAGE_APPROVAL" && S.role === "garage") ||
-    (q.status === "DRAFT" && S.role === "garage");
+    ["DRAFT", "PENDING_GARAGE_APPROVAL", "PENDING_CUSTOMER_APPROVAL"].includes(
+      q.status,
+    );
 
   const isOpen = (q) =>
     ["DRAFT", "PENDING_GARAGE_APPROVAL", "PENDING_CUSTOMER_APPROVAL"].includes(
@@ -1665,11 +1667,6 @@
      PUBLIC
      ========================================================= */
   function render() {
-    document
-      .querySelectorAll("#roleSwitch button")
-      .forEach((b) =>
-        b.classList.toggle("is-active", b.dataset.role === S.role),
-      );
     renderSidebar();
     renderMain();
   }

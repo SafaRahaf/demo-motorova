@@ -83,7 +83,6 @@
   /* ---------------- handlers ---------------- */
   const handlers = {
     /* navigation */
-    role: (id, el) => actions.setRole(el.dataset.role),
     screen: (id) => actions.setScreen(id),
     job: (id) => actions.selectJob(id),
     tab: (id) => actions.setTab(id),
