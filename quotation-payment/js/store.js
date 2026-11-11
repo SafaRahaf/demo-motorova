@@ -17,14 +17,18 @@
     d.setDate(d.getDate() + n);
     return d.toISOString();
   };
+  /* Display currency. Change these two values to switch the whole UI (£ ⇄ $).
+     Stored money is always integer minor units, so this is display-only. */
+  const CURRENCY = "GBP";
+  const LOCALE = "en-GB";
   const money = (cents) =>
-    new Intl.NumberFormat("en-US", {
+    new Intl.NumberFormat(LOCALE, {
       style: "currency",
-      currency: "USD",
+      currency: CURRENCY,
     }).format((cents || 0) / 100);
   const fmtDateTime = (iso) =>
     iso
-      ? new Date(iso).toLocaleString("en-US", {
+      ? new Date(iso).toLocaleString(LOCALE, {
           month: "short",
           day: "numeric",
           hour: "numeric",
@@ -33,7 +37,7 @@
       : "—";
   const fmtDay = (iso) =>
     iso
-      ? new Date(iso).toLocaleDateString("en-US", {
+      ? new Date(iso).toLocaleDateString(LOCALE, {
           month: "short",
           day: "numeric",
           year: "numeric",
@@ -62,7 +66,10 @@
       depositValue: 30,
       storageDailyRate: 3500,
       storageGraceDays: 3,
-      reissueInvoiceOnPayment: true,
+      /* false = payments accumulate on the live invoice (recommended).
+         true  = every payment issues a new version and voids the previous one.
+         Voiding is otherwise reserved for the "combine invoices" action. */
+      reissueInvoiceOnPayment: false,
     },
     taxes: [],
     services: [],
@@ -125,6 +132,13 @@
         (i) =>
           i.jobId === jobId && i.kind === "TAX_INVOICE" && i.status !== "VOID",
       ),
+    /* Every payable tax invoice on the job. More than one is normal: each
+       accepted quote gets its own document, and nothing is voided to get there. */
+    liveInvoices: (jobId) =>
+      S.invoices.filter(
+        (i) =>
+          i.jobId === jobId && i.kind === "TAX_INVOICE" && i.status !== "VOID",
+      ),
     voidedInvoices: (jobId) =>
       S.invoices.filter(
         (i) =>
@@ -150,6 +164,79 @@
       S.payments.filter(
         (p) => (sel.invoice(p.invoiceId) || {}).jobId === jobId,
       ),
+
+    /* ---------- quote <-> invoice traceability ---------- */
+    /*
+       Answers "has this quote been invoiced, and by which documents?".
+       A quote may legitimately be covered by several live invoices, or by one
+       that was later merged into a combined invoice — so we report all of it.
+     */
+    invoicesForQuote: (quoteId) => {
+      const merged = new Set();
+      const out = [];
+      S.invoices.forEach((i) => {
+        const c = i.combinedFromInvoiceIds || [];
+        if (
+          i.quoteId === quoteId ||
+          c.some((id) => (sel.invoice(id) || {}).quoteId === quoteId)
+        ) {
+          out.push(i);
+          if (i.supersededBy) merged.add(i.supersededBy);
+        }
+      });
+      return out;
+    },
+    quoteInvoiceStatus: (quoteId) => {
+      const all = sel
+        .invoicesForQuote(quoteId)
+        .filter((i) => i.kind === "TAX_INVOICE");
+      const live = all.filter((i) => i.status !== "VOID");
+      const voided = all.filter((i) => i.status === "VOID");
+      const q = sel.quote(quoteId);
+      return {
+        invoiced: all.length > 0,
+        live,
+        voided,
+        total: q ? quoteTotals(q).total : 0,
+        /* the document to link to: live one first, else the void history */
+        latest: live[live.length - 1] || voided[voided.length - 1] || null,
+      };
+    },
+    /* Accepted quotes whose work is not on any live invoice yet. */
+    uninvoicedQuotes: (jobId) =>
+      sel
+        .quotesForJob(jobId)
+        .filter(
+          (q) =>
+            q.status === "ACCEPTED" &&
+            ["STANDARD", "SUPPLEMENTARY", "SETTLEMENT", "WARRANTY"].includes(
+              q.type,
+            ) &&
+            !q.invoicedAt,
+        ),
+    /* Sum across every live invoice — the one "what does the customer owe" number. */
+    jobTotals: (jobId) => {
+      const live = sel.liveInvoices(jobId);
+      const total = live.reduce((s, i) => s + (i.total || 0), 0);
+      const paid = live.reduce((s, i) => s + (i.amountPaid || 0), 0);
+      return { total, paid, balance: Math.max(0, total - paid) };
+    },
+    /* Running balance shown on each ledger row. */
+    balanceAfter: (paymentId) => {
+      const p = sel.payment(paymentId);
+      if (!p) return 0;
+      const inv = sel.invoice(p.invoiceId);
+      if (!inv) return 0;
+      const upto = S.payments
+        .filter((x) => x.invoiceId === inv.id)
+        .sort((a, b) => new Date(a.paidAt) - new Date(b.paidAt));
+      const idx = upto.findIndex((x) => x.id === paymentId);
+      const paidSoFar = upto
+        .slice(0, idx + 1)
+        .reduce((s, x) => s + x.amount, 0);
+      const carried = inv.carriedPaid || 0;
+      return Math.max(0, inv.total - carried - paidSoFar);
+    },
     refundsForJob: (jobId) =>
       S.refunds.filter((r) => (sel.invoice(r.invoiceId) || {}).jobId === jobId),
     creditNotesForInvoice: (invId) =>
@@ -279,18 +366,25 @@
   /* =========================================================
      INVOICE MATH
      ========================================================= */
-  /* Money received for a whole job, across every invoice version. */
-  const jobPaid = (jobId) =>
+  /* Money actually received against ONE invoice. Invoice-scoped on purpose:
+     a job can legitimately have several live invoices at once, and a job-wide
+     total would show the same money on every one of them. */
+  const invoicePaid = (invoiceId) =>
     S.payments
-      .filter((p) => {
-        const i = sel.invoice(p.invoiceId);
-        return (
-          i &&
-          i.jobId === jobId &&
-          ["SUCCEEDED", "PARTIALLY_REFUNDED", "REFUNDED"].includes(p.status)
-        );
-      })
+      .filter(
+        (p) =>
+          p.invoiceId === invoiceId &&
+          ["SUCCEEDED", "PARTIALLY_REFUNDED", "REFUNDED"].includes(p.status),
+      )
       .reduce((s, p) => s + p.amount, 0);
+
+  const invoiceRefunded = (invoiceId) =>
+    S.refunds
+      .filter((r) => r.invoiceId === invoiceId && r.status === "COMPLETED")
+      .reduce((s, r) => s + r.amount, 0);
+
+  /* Kept for the job-level summary views. */
+  const jobPaid = (jobId) => sel.jobTotals(jobId).paid;
 
   const jobRefunded = (jobId) =>
     S.refunds
@@ -300,6 +394,13 @@
       })
       .reduce((s, r) => s + r.amount, 0);
 
+  /*
+     Recompute a document's money from its lines and its own payments.
+     `carriedPaid` holds money received on invoices that were later merged into
+     this one, so a combined invoice still shows the true balance:
+        balance = total - carriedPaid - payments made on this invoice
+     A VOID document is frozen: it keeps the figures it had when voided.
+  */
   function syncInvoice(inv) {
     const t = docTotals(inv.lines);
     inv.subtotal = t.subtotal;
@@ -329,18 +430,18 @@
       return inv;
     }
 
-    const paid = jobPaid(inv.jobId);
-    const refunded = jobRefunded(inv.jobId);
-    const balance = Math.max(0, inv.total - paid);
+    const paid = invoicePaid(inv.id);
+    const refunded = invoiceRefunded(inv.id);
+    const carried = inv.carriedPaid || 0;
+    const balance = Math.max(0, inv.total - carried - paid);
 
-    inv.amountPaid = paid;
+    inv.amountPaid = paid + carried;
     inv.refunded = refunded;
     inv.balance = balance;
 
     if (inv.total === 0) inv.status = "PAID";
-    else if (balance === 0)
-      inv.status = refunded > 0 && refunded >= paid ? "REFUNDED" : "PAID";
-    else if (paid > 0) inv.status = "PARTIALLY_PAID";
+    else if (balance === 0) inv.status = "PAID";
+    else if (inv.amountPaid > 0) inv.status = "PARTIALLY_PAID";
     else inv.status = "UNPAID";
 
     inv.vehicleHold = inv.kind === "TAX_INVOICE" && balance > 0;
@@ -407,16 +508,22 @@
     return { lines, base, addons, settlement };
   }
 
-  /* True when accepted work has not yet reached the invoice. */
+  /* Lines for ONE quote, ready to invoice. */
+  function linesForQuote(q) {
+    return linesFromQuote(q, q.type === "SUPPLEMENTARY");
+  }
+
+  /*
+     True when there is accepted work that has not reached any live invoice.
+     Since documents are issued per quote, this reports how much un-invoiced
+     work exists rather than diffing a single "current" invoice.
+  */
   function invoiceNeedsUpdate(jobId) {
-    const inv = sel.stdInvoice(jobId);
-    if (!inv) return null;
-    const built = buildLines(jobId);
-    if (!built.base) return null;
-    const a = docTotals(built.lines).total;
-    const b = docTotals(inv.lines).total;
-    if (a === b && built.lines.length === inv.lines.length) return null;
-    return { delta: a - b, lines: built.lines.length - inv.lines.length };
+    const pending = sel.uninvoicedQuotes(jobId);
+    if (!pending.length) return null;
+    const total = pending.reduce((s, q) => s + quoteTotals(q).total, 0);
+    const lines = pending.reduce((s, q) => s + q.items.length, 0);
+    return { delta: total, lines, quotes: pending.length };
   }
 
   /* =========================================================
@@ -901,6 +1008,9 @@
       { no: 1, total: quoteTotals(q3).total, by: "Garage", at: addDays(t, -6) },
     ];
     S.quotes.push(q3);
+    /* the seed invoice already covers this quote */
+    q3.invoicedAt = addDays(t, -5);
+    q3.invoiceIds = ["inv_3"];
 
     const inv3 = {
       id: "inv_3",
@@ -1475,6 +1585,49 @@
     },
 
     /* ---------- new quotes ---------- */
+    /*
+       Garage opens a job for a customer who walked in / phoned.
+       Creates exactly one job (customer + vehicle + complaint) and leaves it
+       empty: the garage then clicks "+ New quote" to price the work.
+       Returns the new job id so the caller can select it.
+    */
+    createJob(payload) {
+      const count = S.jobs.length + 1043;
+      const job = {
+        id: uid("job"),
+        jobNo: "JC-" + count,
+        garageName: "Northgate Auto Works",
+        customerName: (payload.customerName || "Walk-in customer").trim(),
+        customerEmail: (payload.customerEmail || "").trim(),
+        vehicle: {
+          year: Number(payload.year) || new Date().getFullYear(),
+          make: (payload.make || "").trim(),
+          model: (payload.model || "").trim(),
+          plate: (payload.plate || "").trim().toUpperCase(),
+          vin: (payload.vin || "PENDING-" + count).trim(),
+          odometer: Number(payload.odometer) || 0,
+        },
+        status: "QUOTING",
+        createdAt: nowISO(),
+        pausedReason: null,
+        dependsOnQuoteId: null,
+      };
+      S.jobs.push(job);
+      log(
+        job.id,
+        null,
+        "Garage",
+        "JOB_CREATED",
+        `Job ${job.jobNo} opened for ${job.customerName} — ${job.vehicle.make} ${job.vehicle.model} (${job.vehicle.plate}).` +
+          (payload.complaint ? ` Complaint: ${payload.complaint}` : ""),
+        null,
+        null,
+      );
+      toast(`Job ${job.jobNo} created. Add a quote to price the work.`, "ok");
+      refresh();
+      return job.id;
+    },
+
     createSupplementary(jobId) {
       const job = sel.job(jobId);
       const parent = sel.stdQuote(jobId) || sel.activeQuote(jobId);
@@ -1920,8 +2073,218 @@
       refresh();
     },
 
-    /* ---------- voiding a document ---------- */
     /*
+       "Generate" — issue one tax invoice for every accepted quote that has not
+       been invoiced yet. Existing live invoices are NOT touched: nothing that
+       carries money is ever rewritten or voided by this action.
+
+       Idempotent: a quote is stamped with `invoicedAt`, so pressing the button
+       twice cannot produce two documents for the same work.
+       Returns the list of new invoices (empty when there was nothing to bill).
+    */
+    generateInvoices(jobId) {
+      const job = sel.job(jobId);
+      const pending = sel.uninvoicedQuotes(jobId);
+      if (!pending.length) {
+        toast("Nothing new to invoice.", "warn");
+        return [];
+      }
+      const created = [];
+      const versions = sel.invoiceVersions(jobId);
+      let lastSeq = versions.reduce((m, i) => Math.max(m, i.seq || 1), 0);
+
+      pending.forEach((q) => {
+        lastSeq += 1;
+        const isWarranty = q.type === "WARRANTY";
+        const doc = {
+          id: uid("inv"),
+          jobId,
+          quoteId: q.id,
+          no: (isWarranty ? "INV-" : "INV-") + counters.inv++,
+          kind: isWarranty ? "WARRANTY" : "TAX_INVOICE",
+          originalInvoiceId: isWarranty ? q.originalInvoiceId || null : null,
+          settlementQuoteId: q.type === "SETTLEMENT" ? q.id : null,
+          supersedes: null,
+          supersededBy: null,
+          voidedAt: null,
+          voidReason: null,
+          seq: lastSeq,
+          paymentId: null,
+          carriedPaid: 0,
+          carriedFromInvoiceIds: [],
+          lines: linesForQuote(q),
+          issuedAt: nowISO(),
+          dueAt: addDays(nowISO(), 14),
+          depositRequired: isWarranty ? 0 : depositFor(q),
+          depositType: isWarranty ? "NONE" : q.depositType,
+          depositValue: isWarranty ? 0 : q.depositValue,
+        };
+        S.invoices.push(doc);
+        syncInvoice(doc);
+
+        q.invoicedAt = nowISO();
+        q.invoiceIds = (q.invoiceIds || []).concat(doc.id);
+        created.push(doc);
+
+        log(
+          jobId,
+          q.id,
+          "Garage",
+          "INVOICE_ISSUED",
+          `${doc.no} issued from ${q.no} for ${money(doc.total)}.`,
+          null,
+          doc.total,
+        );
+      });
+
+      /* The proforma has served its purpose once a real invoice exists. */
+      const pro = sel.openProforma(jobId);
+      if (pro && created.length) {
+        pro.status = "SUPERSEDED";
+        pro.supersededBy = created[created.length - 1].id;
+        syncInvoice(pro);
+      }
+
+      if (job.status === "AWAITING_INVOICE") {
+        const totals = sel.jobTotals(jobId);
+        job.status =
+          totals.total > 0 &&
+          totals.paid === 0 &&
+          created.some((d) => d.depositRequired > 0)
+            ? "AWAITING_DEPOSIT"
+            : "IN_PROGRESS";
+        job.pausedReason =
+          job.status === "AWAITING_DEPOSIT"
+            ? "Deposit required before work begins."
+            : null;
+      }
+
+      toast(
+        created.length === 1
+          ? `Invoice ${created[0].no} issued.`
+          : `${created.length} invoices issued: ${created.map((d) => d.no).join(", ")}.`,
+        "ok",
+      );
+      refresh();
+      return created;
+    },
+
+    /*
+       "Generate combined invoice" — the one place that legitimately voids.
+       Takes every live tax invoice on the job, merges their lines into a single
+       new invoice, carries the money already received forward, then voids the
+       originals pointing at their replacement.
+
+       The combined document keeps the audit trail honest by storing:
+         combinedFromInvoiceIds[]  — what it replaced
+         carriedPaid               — money received on those documents
+       so the printed balance is always explainable:
+         total - carriedPaid - payments on this invoice
+    */
+    generateCombinedInvoice(jobId) {
+      const job = sel.job(jobId);
+      const live = sel
+        .liveInvoices(jobId)
+        .filter((i) => i.kind === "TAX_INVOICE");
+      if (live.length < 2) {
+        toast(
+          live.length === 0
+            ? "There is no live invoice to combine yet."
+            : "Only one live invoice — nothing to combine.",
+          "warn",
+        );
+        return null;
+      }
+
+      const carriedPaid = live.reduce((s, i) => s + (i.amountPaid || 0), 0);
+      const lines = [];
+      const quoteIds = [];
+      live.forEach((inv) => {
+        inv.lines.forEach((l) =>
+          lines.push(Object.assign({}, l, { id: uid("ln") })),
+        );
+        if (inv.quoteId) quoteIds.push(inv.quoteId);
+      });
+
+      const versions = sel.invoiceVersions(jobId);
+      const seq = versions.reduce((m, i) => Math.max(m, i.seq || 1), 0) + 1;
+
+      const combined = {
+        id: uid("inv"),
+        jobId,
+        quoteId: live[0].quoteId || null,
+        no: "INV-" + counters.inv++,
+        kind: "TAX_INVOICE",
+        originalInvoiceId: null,
+        settlementQuoteId: null,
+        supersedes: null,
+        supersededBy: null,
+        voidedAt: null,
+        voidReason: null,
+        seq,
+        paymentId: null,
+        /* money received on the invoices this one replaces */
+        carriedPaid,
+        combinedFromInvoiceIds: live.map((i) => i.id),
+        isCombined: true,
+        lines,
+        issuedAt: nowISO(),
+        dueAt: addDays(nowISO(), 14),
+        depositRequired: 0,
+        depositType: "NONE",
+        depositValue: 0,
+      };
+      S.invoices.push(combined);
+      syncInvoice(combined);
+
+      /* Now — and only now — the originals are voided, pointing forward. */
+      live.forEach((inv) => {
+        inv.status = "VOID";
+        inv.voidedAt = nowISO();
+        inv.voidReason = "Consolidated into " + combined.no;
+        inv.supersededBy = combined.id;
+        log(
+          jobId,
+          null,
+          "System",
+          "INVOICE_VOIDED",
+          `${inv.no} consolidated into ${combined.no}.`,
+          inv.total,
+          null,
+        );
+      });
+
+      /* Re-point the quotes' invoice references at the surviving document. */
+      S.quotes
+        .filter((q) => quoteIds.includes(q.id))
+        .forEach((q) => {
+          q.invoiceIds = [combined.id];
+        });
+
+      log(
+        jobId,
+        null,
+        "Garage",
+        "INVOICE_COMBINED",
+        `${combined.no} combines ${live.length} invoices (${live
+          .map((i) => i.no)
+          .join(
+            ", ",
+          )}) and carries forward ${money(carriedPaid)} already paid. ` +
+          `Total ${money(combined.total)}, remaining ${money(combined.balance)}.`,
+        null,
+        combined.total,
+      );
+
+      toast(
+        `${combined.no} issued — combined ${live.length} invoices, ${money(combined.balance)} remaining.`,
+        "ok",
+      );
+      refresh();
+      return combined;
+    },
+
+    /* ---------- voiding a document ---------- */ /*
        Manual void = "this document was wrong from the start".
        Allowed only while nothing has been paid on it. Once money has moved the
        document is not wrong, it is merely out of date — that is what the
@@ -2238,6 +2601,9 @@
           voidReason: null,
           seq: (inv.seq || 1) + 1,
           paymentId: p.id,
+          /* carry forward anything already received on the version being replaced,
+             otherwise the replacement would look unpaid. */
+          carriedPaid: inv.amountPaid || 0,
           lines: inv.lines.map((l) => Object.assign({}, l, { id: uid("ln") })),
           issuedAt: nowISO(),
           dueAt: inv.dueAt,
@@ -2249,7 +2615,21 @@
         S.invoices.push(current);
         syncInvoice(current);
 
-        /* 2. void the previous version and point it at its replacement */
+        /* 2. void the previous version and point it at its replacement.
+              Payments made against it are re-pointed at the replacement so the
+              ledger never shows money sitting on a void document. */
+        S.payments
+          .filter((x) => x.invoiceId === inv.id)
+          .forEach((x) => {
+            x.invoiceId = current.id;
+            x.reassignedFromInvoiceId = inv.id;
+          });
+        S.receipts
+          .filter((r) => r.invoiceId === inv.id)
+          .forEach((r) => {
+            r.invoiceId = current.id;
+          });
+
         inv.status = "VOID";
         inv.voidedAt = nowISO();
         inv.voidReason = "Superseded by " + current.no;
@@ -2324,7 +2704,6 @@
           null,
         );
       }
-
       log(
         inv.jobId,
         null,

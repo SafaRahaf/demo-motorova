@@ -1,0 +1,50 @@
+create garage create service offer first system
+
+edit offers & quotation in 
+
+invoice first void and summery and invoice unchangable 
+need generate new invoice based on invoice overview create button
+actual invoice generate button na click korle hobe na  
+main unvoice unchangable
+100 tk diye dile jodi invoice create na hoye thake then  
+jotobar invoice create hole ager ta delete hoye jabe
+invoice & receipt 
+
+ekta garage er 40 ta service ache jeta list show korbe okhan theke list e na pele custom add korbe
+tex info service er shathe show kora lagbe and service er upr or depending oin each stuffs tex ucha nama hote pare er jonno tex set korar o system lagbe
+line item add 
+
+bill group
+quote create er age job cteate hobe 
+
+payment types like proforma and dipoit etc add on ui as well
+
+invoice e problem still works needed
+
+the process - when customer pays each time untill it reaches the actual full ammount the prev invoices will be voided (invoice + reciept) and the latest one will show as not voided
+
+
+
+
+/// ------------------------ ///
+
+quote create from scratch
+full onboard besic scene job create
+
+proti payment e invoice create hoy jeta click korle void hobe
+(all invoices voided and last er ta active)
+
+other payments niche 
+remaining balence eto tk
+
+generate me with the new payment new quote (ager invoice shoho combined kore invoice generate korbe ager invoice void kore latest ta show kore)
+
+quotation konta invoice generetate hoice eta bujhano lagbe (just status accepted is not enough) 
+
+ammount and line item ad hoynai jojhon quotation new add kori
+
+
+download invoice button needed with invoice download design and functionality on each invoce 
+combine invoice with payment alda button oita active hoye jabe jokhon payment hobe 
+each payment er por invoice er shathe lagano receeipt show korbe emonvabe jate bujha jay eta invoice er ongsho na
+combined with payment er button click korle nicher payment ta show korbe under invoice jeta ekhon show kortese

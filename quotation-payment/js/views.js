@@ -116,6 +116,20 @@
       q.status,
     );
 
+  /* Which document(s) cover this quote — the badge that answers
+     "is this quote invoiced yet, and where?" without hunting through tabs. */
+  function invoiceBadge(q) {
+    const st = sel.quoteInvoiceStatus(q.id);
+    if (!st.invoiced)
+      return `<span class="badge badge--none" title="No invoice has been generated for this quote">Not invoiced</span>`;
+    if (!st.live.length)
+      return `<button type="button" class="badge badge--void" data-act="tabs" data-id="bill" title="Its invoice was consolidated into a newer one">Voided → ${esc(st.latest ? st.latest.no : "—")}</button>`;
+    const first = st.live[0];
+    const extra = st.live.length > 1 ? ` +${st.live.length - 1}` : "";
+    return `<button type="button" class="badge badge--invoiced" data-act="tabs" data-id="bill" title="Open the invoice for this quote">
+      Invoiced → ${esc(first.no)}${esc(extra)}</button>`;
+  }
+
   /* tax chip shown under a line description */
   const taxChip = (line) => {
     if (!line.taxId) return '<span class="taxchip taxchip--none">no tax</span>';
@@ -142,6 +156,15 @@
       })
       .join("");
   }
+
+  /* Total refunded across the job, for the overview hint. */
+  const jobRefundedTotal = (jobId) =>
+    S.refunds
+      .filter((r) => {
+        const i = sel.invoice(r.invoiceId);
+        return i && i.jobId === jobId && r.status === "COMPLETED";
+      })
+      .reduce((s, r) => s + r.amount, 0);
 
   /* =========================================================
      SIDEBAR
@@ -204,7 +227,7 @@
     const newJobBtn =
       S.role === "customer"
         ? `<button type="button" class="btn btn--primary btn--sm" style="width:100%;margin-bottom:10px" data-act="newJob">+ New request</button>`
-        : "";
+        : `<button type="button" class="btn btn--primary btn--sm" style="width:100%;margin-bottom:10px" data-act="newGarageJob">+ New job</button>`;
 
     document.getElementById("sidebar").innerHTML = `
       ${nav}
@@ -318,8 +341,11 @@
   function viewOverview(job) {
     const active = sel.activeQuote(job.id);
     const inv = sel.stdInvoice(job.id);
+    const live = sel.liveInvoices(job.id);
+    const totals = sel.jobTotals(job.id);
     const pro = sel.openProforma(job.id);
     const cancel = sel.openCancellation(job.id);
+    const pendingQuotes = sel.uninvoicedQuotes(job.id);
 
     const kpis = `
       <div class="kpis">
@@ -329,14 +355,14 @@
           <div class="kpi__hint">${active ? esc(active.no + " · " + (STATUS[active.status] || [active.status])[0]) : "No quote in play"}</div>
         </div>
         <div class="kpi">
-          <div class="kpi__label">${inv ? (S.role === "customer" ? "Bill total" : "Invoice total") : "Proforma"}</div>
-          <div class="kpi__value">${inv ? money(inv.total) : pro ? money(pro.total) : "—"}</div>
-          <div class="kpi__hint">${inv ? esc(inv.no + " · " + inv.status.replace("_", " ")) : pro ? esc(pro.no + " · proforma") : "No document yet"}</div>
+          <div class="kpi__label">${inv ? (S.role === "customer" ? "Amount billed" : "Invoiced") : "Proforma"}</div>
+          <div class="kpi__value">${live.length ? money(totals.total) : pro ? money(pro.total) : "—"}</div>
+          <div class="kpi__hint">${live.length ? `${live.length} live invoice${live.length === 1 ? "" : "s"} · ${esc(live.map((i) => i.no).join(", "))}` : pro ? esc(pro.no + " · proforma") : "No document yet"}</div>
         </div>
         <div class="kpi">
           <div class="kpi__label">Remaining balance</div>
-          <div class="kpi__value ${inv && inv.balance > 0 ? "is-due" : "is-ok"}">${inv ? money(inv.balance) : "—"}</div>
-          <div class="kpi__hint">${inv ? "Paid " + money(inv.amountPaid) + (inv.refunded ? " · Refunded " + money(inv.refunded) : "") : "Nothing payable yet"}</div>
+          <div class="kpi__value ${totals.balance > 0 ? "is-due" : "is-ok"}">${live.length ? money(totals.balance) : "—"}</div>
+          <div class="kpi__hint">${live.length ? "Paid " + money(totals.paid) + (jobRefundedTotal(job.id) ? " · Refunded " + money(jobRefundedTotal(job.id)) : "") : "Nothing payable yet"}</div>
         </div>
         <div class="kpi">
           <div class="kpi__label">Vehicle hold</div>
@@ -346,12 +372,20 @@
       </div>`;
 
     let holdBanner = "";
-    if (inv && inv.vehicleHold) {
+    if (totals.balance > 0 && live.length) {
       holdBanner = banner(
         "hold",
         "&#128274;",
-        `<b>Vehicle Hold active.</b> ${money(inv.balance)} still owed on ${esc(inv.no)}.
-         Garage staff must not release the vehicle or keys until the balance reaches $0.00.`,
+        `<b>Vehicle Hold active.</b> ${money(totals.balance)} still owed across ${live.length} live invoice${live.length === 1 ? "" : "s"}.
+         Garage staff must not release the vehicle or keys until the balance reaches ${money(0)}.`,
+      );
+    }
+    if (pendingQuotes.length) {
+      holdBanner += banner(
+        "warn",
+        "&#9888;",
+        `<b>Accepted work not yet billed.</b> ${pendingQuotes.length} quote${pendingQuotes.length === 1 ? "" : "s"} accepted but not on an invoice
+         (${pendingQuotes.map((q) => esc(q.no)).join(", ")}). Use <b>Generate</b> on the Invoice tab to bill it.`,
       );
     }
 
@@ -525,6 +559,7 @@
         </div>
         <div style="text-align:right">
           ${pill(q.status)}
+          <div style="margin-top:6px">${invoiceBadge(q)}</div>
           <div class="quote__amount" id="qtotal-${q.id}" style="margin-top:6px">${money(t.total)}</div>
         </div>
       </div>`;
@@ -689,8 +724,16 @@
   /* =========================================================
      BILL / INVOICE
      ========================================================= */
+  /*
+     Shows every LIVE invoice, not just one. A job can hold several: the base
+     quote, then add-ons billed later. "Generate" issues what is missing;
+     "Combine" merges the live set into one document (the only action that voids).
+  */
   function viewBill(job) {
-    const inv = sel.stdInvoice(job.id);
+    const live = sel.liveInvoices(job.id);
+    const inv = live[0] || null;
+    const totals = sel.jobTotals(job.id);
+    const pendingQuotes = sel.uninvoicedQuotes(job.id);
     const pro = sel.openProforma(job.id);
     const supersededPros = sel
       .invoicesForJob(job.id)
@@ -701,88 +744,143 @@
     const voidedDocs = sel
       .voidedInvoices(job.id)
       .sort((a, b) => (b.seq || 1) - (a.seq || 1));
-    const built = buildLines(job.id);
     const label = S.role === "customer" ? "bill" : "invoice";
 
-    /* nothing issued yet */
-    if (!inv && !pro) {
-      if (!built.base) {
-        return empty(
-          "No " + label + " yet",
-          "A document can only be issued once a quote is accepted.",
-        );
-      }
-      const acceptedWarranty = sel
-        .quotesForJob(job.id)
-        .find(
-          (q) =>
-            q.type === "WARRANTY" && q.status === "ACCEPTED" && !q.invoicedAt,
-        );
-      return `
-        <div class="card">
-          <div class="card__head">
-            <div>
-              <div class="card__title">Quote accepted — no document issued yet</div>
-              <div class="card__sub">
-                ${esc(built.base.no)} locked at ${money(docTotals(built.lines).total)}.
-                Nothing is payable until the garage issues a tax invoice.
-              </div>
-            </div>
-          </div>
-          <div class="card__body">
-            ${
-              S.role === "garage"
-                ? banner(
-                    "info",
-                    "&#8505;",
-                    `<b>Choose a document.</b> A <b>proforma</b> is informational — it shows the customer what they will be billed.
-                   A <b>tax invoice</b> is the payable document that creates the balance and the Vehicle Hold.`,
-                  )
-                : banner(
-                    "info",
-                    "&#8505;",
-                    "The garage has not issued a bill yet. You will be notified when it arrives.",
-                  )
-            }
-          </div>
-          <div class="card__foot">
-            ${
-              S.role === "garage"
-                ? `
-              ${
-                acceptedWarranty
-                  ? btn(
-                      "Generate warranty invoice ($0.00)",
-                      "generateInvoice",
-                      job.id,
-                      "btn btn--primary",
-                    )
-                  : `${btn("Generate proforma", "generateProforma", job.id)}
-                   ${btn("Generate invoice", "generateInvoice", job.id, "btn btn--primary")}`
-              }`
-                : ""
-            }
-            <span class="spacer"></span>
-            <span class="sub">Nothing is created automatically.</span>
+    /* ---- action bar: Generate + Combine ---- */
+    const pendingTotal = pendingQuotes.reduce(
+      (s, q) => s + quoteTotals(q).total,
+      0,
+    );
+    const canCombine = live.filter((i) => i.kind === "TAX_INVOICE").length >= 2;
+
+    const generateBar = `
+      <div class="card">
+        <div class="card__head">
+          <div>
+            <div class="card__title">Billing actions</div>
+            <div class="card__sub">Invoices are only ever created by an explicit click. Nothing is automatic.</div>
           </div>
         </div>
+        <div class="card__body">
+          <div class="row">
+            ${
+              pendingQuotes.length
+                ? btn(
+                    `Generate invoice${pendingQuotes.length > 1 ? `s (${pendingQuotes.length})` : ""} · ${money(pendingTotal)}`,
+                    "generateInvoices",
+                    job.id,
+                    "btn btn--primary",
+                  )
+                : `<button type="button" class="btn btn--primary" disabled>Nothing new to invoice</button>`
+            }
+            ${
+              canCombine
+                ? btn(
+                    `Combine ${live.length} live invoices`,
+                    "combinedModal",
+                    job.id,
+                    "btn btn--ghost",
+                  )
+                : `<button type="button" class="btn btn--ghost" disabled title="At least two live invoices are needed">Combine invoices</button>`
+            }
+            <span class="spacer"></span>
+            ${
+              S.role === "garage"
+                ? `<label class="checkline" style="margin:0" title="Off = payments build up on one invoice. On = every payment issues a new version and voids the previous.">
+                     <input type="checkbox" data-act="toggleReissue" ${S.settings.reissueInvoiceOnPayment ? "checked" : ""}>
+                     <span class="sub">New version on each payment</span>
+                   </label>`
+                : ""
+            }
+          </div>
+          <div class="sub" style="margin-top:10px">
+            ${
+              pendingQuotes.length
+                ? `<b>Will be invoiced:</b> ${pendingQuotes.map((q) => esc(q.no)).join(", ")}. Existing live invoices are left untouched.`
+                : live.length
+                  ? `<b>All accepted work is invoiced.</b> ${live.length} live document${live.length === 1 ? "" : "s"}.`
+                  : "Nothing accepted yet — accept a quote before generating a document."
+            }
+          </div>
+        </div>
+      </div>`;
+
+    /* nothing issued yet */
+    if (!live.length && !pro) {
+      if (!buildLines(job.id).base) {
+        return (
+          generateBar +
+          empty(
+            "No " + label + " yet",
+            "A document can only be issued once a quote is accepted.",
+          ) +
+          (voidedDocs.length ? versionHistory(job, voidedDocs) : "")
+        );
+      }
+      return `
+        ${generateBar}
         ${voidedDocs.length ? versionHistory(job, voidedDocs) : ""}`;
     }
 
+    /* ---- multi-invoice summary ---- */
+    const summary =
+      live.length > 1
+        ? `
+      <div class="card summary">
+        <div class="card__head">
+          <div>
+            <div class="card__title">All live invoices</div>
+            <div class="card__sub">${live.length} payable documents on this job. Combine them if you would rather give the customer one page.</div>
+          </div>
+        </div>
+        <table class="table">
+          <thead><tr><th>Document</th><th>From quote</th><th class="num">Total</th><th class="num">Paid</th><th class="num">Remaining</th><th>Status</th></tr></thead>
+          <tbody>
+            ${live
+              .map((i) => {
+                const q = i.quoteId ? sel.quote(i.quoteId) : null;
+                return `<tr>
+                <td><span class="mono">${esc(i.no)}</span></td>
+                <td class="sub">${q ? esc(q.no) : "—"}</td>
+                <td class="num">${money(i.total)}</td>
+                <td class="num">${money(i.amountPaid)}</td>
+                <td class="num ${i.balance > 0 ? "is-due" : ""}"><b>${money(i.balance)}</b></td>
+                <td>${pill(i.status)}</td>
+              </tr>`;
+              })
+              .join("")}
+          </tbody>
+          <tfoot><tr>
+            <td colspan="2"><b>Job total</b></td>
+            <td class="num"><b>${money(totals.total)}</b></td>
+            <td class="num"><b>${money(totals.paid)}</b></td>
+            <td class="num"><b>${money(totals.balance)}</b></td>
+            <td></td>
+          </tr></tfoot>
+        </table>
+      </div>`
+        : "";
+
     return `
+      ${generateBar}
+      ${summary}
       ${pro ? proformaDoc(job, pro) : ""}
-      ${inv ? invoiceDoc(job, inv) : ""}
+      ${live.map((d) => invoiceDoc(job, d)).join("")}
       ${warrantyDocs.map((d) => invoiceDoc(job, d)).join("")}
       ${voidedDocs.length ? versionHistory(job, voidedDocs) : ""}
       ${
         supersededPros.length
           ? `
-        <div class="card">
-          <div class="card__body">
-            <div class="card__sub" style="font-weight:650;color:var(--ink-2);margin-bottom:6px">Superseded proformas</div>
+        <details class="voided-acc">
+          <summary>
+            <span class="voided-acc__chev">&#9656;</span>
+            <span class="voided-acc__title">Superseded proformas</span>
+            <span class="voided-acc__count">${supersededPros.length}</span>
+          </summary>
+          <div class="voided-acc__body">
             ${supersededPros.map((p) => `<div class="sub">${esc(p.no)} · ${money(p.total)} · ${esc(p.status.toLowerCase())}${p.supersededBy ? " by " + esc((sel.invoice(p.supersededBy) || {}).no || "") : ""}</div>`).join("")}
           </div>
-        </div>`
+        </details>`
           : ""
       }`;
   }
@@ -822,7 +920,7 @@
           </div>
         </div>
         <div class="card__foot">
-          ${S.role === "garage" ? btn("Convert to tax invoice", "generateInvoice", job.id, "btn btn--primary") : ""}
+          ${S.role === "garage" ? btn("Convert to tax invoice", "generateInvoices", job.id, "btn btn--primary") : ""}
           <span class="spacer"></span>
           <span class="sub">Proforma numbers (PRO-####) never become tax invoices — a new INV-#### is issued.</span>
         </div>
@@ -874,9 +972,8 @@
             ? `<div class="card__body" style="padding-bottom:0">${banner(
                 "warn",
                 "&#9888;",
-                `<b>Accepted work not yet billed.</b> The invoice is out of date by ${money(Math.abs(stale.delta))}
-           (${stale.lines > 0 ? "+" : ""}${stale.lines} line${Math.abs(stale.lines) === 1 ? "" : "s"}).
-           Regenerate it to include the add-on work.`,
+                `<b>Accepted work not yet billed.</b> ${stale.quotes} quote${stale.quotes === 1 ? "" : "s"} accepted but not on an invoice
+           (${money(stale.delta)}, ${stale.lines} line${stale.lines === 1 ? "" : "s"}). Use <b>Generate</b> on the Invoice tab.`,
               )}</div>`
             : ""
         }
@@ -903,6 +1000,8 @@
               <div>Due <b>${fmtDay(inv.dueAt)}</b></div>
               ${inv.kind === "WARRANTY" ? `<div>Rework for <b>${esc((sel.invoice(inv.originalInvoiceId) || {}).no || "—")}</b></div>` : ""}
               ${inv.settlementQuoteId ? "<div><b>Settlement</b> applied</div>" : ""}
+              ${inv.quoteId && sel.quote(inv.quoteId) ? `<div>From quote <b class="mono">${esc(sel.quote(inv.quoteId).no)}</b></div>` : ""}
+              ${inv.combinedFromInvoiceIds && inv.combinedFromInvoiceIds.length ? `<div><b>Combined</b> ${inv.combinedFromInvoiceIds.map((id) => esc((sel.invoice(id) || {}).no || "—")).join(", ")}</div>` : ""}
             </div>
           </div>
 
@@ -918,8 +1017,8 @@
               <div class="totals__row"><span>Subtotal <span class="sub">(excl. tax)</span></span><span>${money(inv.subtotal)}</span></div>
               ${taxBlock(inv.taxes)}
               <div class="totals__row totals__row--major"><span>Total</span><span>${money(inv.total)}</span></div>
-              ${inv.depositRequired > 0 ? `<div class="totals__row"><span>Deposit required upfront</span><span>${money(inv.depositRequired)}</span></div>` : ""}
-              <div class="totals__row totals__row--paid"><span>Paid to date</span><span>&minus;${money(inv.amountPaid)}</span></div>
+              ${inv.carriedPaid > 0 ? `<div class="totals__row totals__row--carried"><span>Paid on consolidated invoices <span class="sub">(${(inv.combinedFromInvoiceIds || []).length} documents)</span></span><span>&minus;${money(inv.carriedPaid)}</span></div>` : ""}
+              ${inv.carriedPaid > 0 && inv.amountPaid - inv.carriedPaid > 0 ? `<div class="totals__row totals__row--paid"><span>Paid on this invoice</span><span>&minus;${money(inv.amountPaid - inv.carriedPaid)}</span></div>` : inv.carriedPaid === 0 ? `<div class="totals__row totals__row--paid"><span>Paid to date</span><span>&minus;${money(inv.amountPaid)}</span></div>` : ""}
               ${inv.refunded > 0 ? `<div class="totals__row"><span>Refunded</span><span>${money(inv.refunded)}</span></div>` : ""}
               <div class="totals__row totals__row--due ${inv.balance === 0 ? "is-zero" : "is-due"}">
                 <span>Remaining balance</span><span>${money(inv.balance)}</span>
@@ -949,7 +1048,7 @@
                 )
               : `<span class="turn-hint">${inv.kind === "TAX_INVOICE" ? "Settled in full." : "Zero-dollar warranty document."}</span>`
           }
-          ${stale && S.role === "garage" ? btn("Update invoice", "generateInvoice", job.id, "btn btn--primary") : ""}
+          ${stale && S.role === "garage" ? btn("Generate invoice for new work", "generateInvoices", job.id, "btn btn--primary") : ""}
           ${
             inv.kind === "TAX_INVOICE" &&
             inv.amountPaid === 0 &&
@@ -963,7 +1062,7 @@
               : ""
           }
           <span class="spacer"></span>
-          <span class="sub">The database row is always <code>Invoice</code>; the label changes per viewer.</span>
+          <span class="sub">A voided document is never payable — combine or reissue to change what is owed.</span>
         </div>
       </div>`;
   }
@@ -973,43 +1072,60 @@
      A tax invoice is never edited or deleted. Every payment issues a new
      version and voids the one before it, so the chain stays auditable.
      ========================================================= */
+  /*
+     Voided documents: collapsed by default so the live invoice stays the focus.
+     Opening the block lists the history; each row opens its frozen document.
+  */
   function versionHistory(job, voided) {
+    const rows = voided
+      .map(
+        (v) => `
+        <tr>
+          <td><span class="tag">v${v.seq || 1}</span></td>
+          <td><span class="mono">${esc(v.no)}</span></td>
+          <td class="sub nowrap">${fmtDay(v.issuedAt)}</td>
+          <td class="sub nowrap">${fmtDay(v.voidedAt)}</td>
+          <td class="num">${money(v.total)}</td>
+          <td class="num sub">${money(v.amountPaid || 0)}</td>
+          <td class="sub">${esc(v.voidReason || "—")}</td>
+          <td class="sub">${v.supersededBy ? `<span class="mono">${esc((sel.invoice(v.supersededBy) || {}).no || "—")}</span>` : "nothing"}</td>
+        </tr>`,
+      )
+      .join("");
+
     return `
-      <div class="card">
-        <div class="card__head">
-          <div>
-            <div class="card__title">Voided versions</div>
-            <div class="card__sub">Kept, never deleted. A paid document is replaced by a new version — an unpaid one can be voided outright.</div>
-          </div>
-        </div>
-        <table class="table">
-          <thead><tr>
-            <th>Version</th><th>Document</th><th>Issued</th><th>Voided</th>
-            <th class="num">Total then</th><th class="num">Paid then</th><th>Reason</th><th>Replaced by</th>
-          </tr></thead>
-          <tbody>
+      <details class="voided-acc">
+        <summary>
+          <span class="voided-acc__chev">&#9656;</span>
+          <span class="voided-acc__title">Voided invoices</span>
+          <span class="voided-acc__count">${voided.length}</span>
+          <span class="voided-acc__hint">Kept for the audit trail — never payable, never deleted</span>
+        </summary>
+        <div class="voided-acc__body">
+          <table class="table">
+            <thead><tr>
+              <th>Version</th><th>Document</th><th>Issued</th><th>Voided</th>
+              <th class="num">Total then</th><th class="num">Paid then</th><th>Reason</th><th>Replaced by</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <div class="voided-acc__docs">
             ${voided
               .map(
                 (v) => `
-              <tr>
-                <td><span class="tag">v${v.seq || 1}</span></td>
-                <td><span class="mono">${esc(v.no)}</span></td>
-                <td class="sub nowrap">${fmtDay(v.issuedAt)}</td>
-                <td class="sub nowrap">${fmtDay(v.voidedAt)}</td>
-                <td class="num">${money(v.total)}</td>
-                <td class="num sub">${money(v.amountPaid || 0)}</td>
-                <td class="sub">${esc(v.voidReason || "—")}</td>
-                <td class="sub">${v.supersededBy ? `<span class="mono">${esc((sel.invoice(v.supersededBy) || {}).no || "—")}</span>` : "nothing"}</td>
-              </tr>`,
+              <details class="voided-doc">
+                <summary>
+                  <span class="voided-acc__chev">&#9656;</span>
+                  <span class="mono">${esc(v.no)}</span>
+                  <span class="sub">· version ${v.seq || 1} · voided ${fmtDay(v.voidedAt)} · ${money(v.total)}</span>
+                </summary>
+                ${voidedDoc(job, v)}
+              </details>`,
               )
               .join("")}
-          </tbody>
-        </table>
-        <div class="card__foot">
-          <span class="sub">Each version below is frozen at the figures it had when it was voided.</span>
+          </div>
         </div>
-      </div>
-      ${voided.map((v) => voidedDoc(job, v)).join("")}`;
+      </details>`;
   }
 
   /* A voided document: full detail, read-only, never payable. */
@@ -1051,6 +1167,7 @@
               <div class="totals__row"><span>Subtotal <span class="sub">(excl. tax)</span></span><span>${money(inv.subtotal)}</span></div>
               ${taxBlock(inv.taxes)}
               <div class="totals__row totals__row--major"><span>Total as issued</span><span>${money(inv.total)}</span></div>
+              ${inv.carriedPaid > 0 ? `<div class="totals__row"><span>Carried forward from earlier invoices</span><span>${money(inv.carriedPaid)}</span></div>` : ""}
               <div class="totals__row totals__row--paid"><span>Paid at the time it was voided</span><span>&minus;${money(inv.amountPaid || 0)}</span></div>
               <div class="totals__row"><span>Balance then</span><span>${money(inv.balance || 0)}</span></div>
             </div>
@@ -1076,6 +1193,7 @@
         "A live tax invoice must exist before money can be taken. Proformas are informational only, and voided invoices can never be paid.",
       );
     }
+    const totals = sel.jobTotals(job.id);
 
     const rows = sel
       .paymentsForJob(job.id)
@@ -1101,6 +1219,7 @@
           }
         </td>
         <td class="num">${money(p.amount)}</td>
+        <td class="num sub">${money(sel.balanceAfter(p.id))}</td>
         <td>${pill(p.status)}</td>
         <td class="sub nowrap">${fmtDateTime(p.paidAt)}</td>
         <td>${
@@ -1193,6 +1312,22 @@
       .join("");
 
     return `
+      ${
+        invs.length > 1
+          ? `<div class="card summary">
+        <div class="card__body">
+          <div class="row" style="align-items:flex-end;gap:28px">
+            <div><div class="kpi__label">Total across ${invs.length} live invoices</div>
+              <div class="kpi__value">${money(totals.total)}</div></div>
+            <div><div class="kpi__label">Paid</div>
+              <div class="kpi__value">${money(totals.paid)}</div></div>
+            <div><div class="kpi__label">Remaining balance</div>
+              <div class="kpi__value ${totals.balance > 0 ? "is-due" : "is-ok"}">${money(totals.balance)}</div></div>
+          </div>
+        </div>
+      </div>`
+          : ""
+      }
       ${payCards}
       <div class="card">
         <div class="card__head">
@@ -1206,7 +1341,7 @@
             ? `
         <table class="table">
           <thead><tr>
-            <th>Payment</th><th>Invoice</th><th class="num">Amount</th><th>Status</th><th>Paid</th><th>Receipt</th><th></th>
+            <th>Payment</th><th>Invoice</th><th class="num">Amount</th><th class="num">Remaining after</th><th>Status</th><th>Paid</th><th>Receipt</th><th></th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>`

@@ -215,7 +215,113 @@
 
     /* ---------- documents ---------- */
     generateProforma: (id) => actions.generateProforma(id),
-    generateInvoice: (id) => actions.generateInvoice(id),
+    generateInvoice: (id) => actions.generateInvoices(id),
+
+    /*
+       "Generate" — confirm first, and list exactly what will be created so the
+       garage never bulk-issues documents blind.
+    */
+    generateInvoices: (jobId) => {
+      const pending = sel.uninvoicedQuotes(jobId);
+      if (!pending.length) {
+        toast("Nothing new to invoice.", "warn");
+        return;
+      }
+      const total = pending.reduce((s, q) => s + Store.quoteTotals(q).total, 0);
+      openModal({
+        title: "Generate invoice",
+        subtitle:
+          "Only the accepted work listed below is billed. Existing live invoices are not changed.",
+        body: `
+          <table class="table table--compact">
+            <thead><tr><th>Quote</th><th>Type</th><th class="num">Amount</th></tr></thead>
+            <tbody>
+              ${pending
+                .map(
+                  (q) => `<tr>
+                  <td class="mono">${q.no}</td>
+                  <td class="sub">${q.type}</td>
+                  <td class="num"><b>${money(Store.quoteTotals(q).total)}</b></td>
+                </tr>`,
+                )
+                .join("")}
+            </tbody>
+            <tfoot><tr><td colspan="2"><b>Total to invoice</b></td><td class="num"><b>${money(total)}</b></td></tr></tfoot>
+          </table>
+          <div class="banner banner--info" style="margin-top:12px">
+            <span class="banner__icon">&#8505;</span>
+            <div>One tax invoice is issued per quote. Nothing that already carries a payment is voided or rewritten.</div>
+          </div>`,
+        submitLabel: "Generate",
+        onSubmit: () => {
+          actions.generateInvoices(jobId);
+        },
+      });
+    },
+
+    /*
+       "Combine" — the one action that voids. Spell out the consequences and the
+       money that will be carried forward before it happens.
+    */
+    combinedModal: (jobId) => {
+      const live = sel
+        .liveInvoices(jobId)
+        .filter((i) => i.kind === "TAX_INVOICE");
+      if (live.length < 2) {
+        toast("At least two live invoices are needed to combine.", "warn");
+        return;
+      }
+      const totals = sel.jobTotals(jobId);
+      const carried = live.reduce((s, i) => s + i.amountPaid, 0);
+      openModal({
+        title: "Generate combined invoice",
+        subtitle:
+          "Merges every live invoice into one document and voids the originals.",
+        body: `
+          <table class="table table--compact">
+            <thead><tr><th>Will be voided</th><th class="num">Total</th><th class="num">Paid</th></tr></thead>
+            <tbody>
+              ${live
+                .map(
+                  (i) => `<tr>
+                  <td class="mono">${i.no}</td>
+                  <td class="num">${money(i.total)}</td>
+                  <td class="num">${money(i.amountPaid)}</td>
+                </tr>`,
+                )
+                .join("")}
+            </tbody>
+          </table>
+          <table class="table table--compact" style="margin-top:10px">
+            <tbody>
+              <tr><td>Combined total</td><td class="num"><b>${money(totals.total)}</b></td></tr>
+              <tr><td>Paid carried forward</td><td class="num">&minus;${money(carried)}</td></tr>
+              <tr><td><b>Remaining to pay</b></td><td class="num"><b>${money(totals.balance)}</b></td></tr>
+            </tbody>
+          </table>
+          <div class="banner banner--warn" style="margin-top:12px">
+            <span class="banner__icon">&#9888;</span>
+            <div>The ${live.length} invoices above become <b>void</b> — they stay readable and are never deleted.
+            A single new invoice is issued showing <b>paid on consolidated invoices</b> so the history still adds up.</div>
+          </div>`,
+        submitLabel: "Combine &amp; void originals",
+        danger: true,
+        onSubmit: () => {
+          actions.generateCombinedInvoice(jobId);
+        },
+      });
+    },
+
+    toggleReissue: () => {
+      S.settings.reissueInvoiceOnPayment = !S.settings.reissueInvoiceOnPayment;
+      toast(
+        S.settings.reissueInvoiceOnPayment
+          ? "Each payment will now void the previous invoice and issue a new version."
+          : "Payments will now build up on the current invoice.",
+        "ok",
+      );
+      global.App.render();
+    },
 
     voidInvoiceModal: (invId) => {
       const inv = sel.invoice(invId);
@@ -588,6 +694,50 @@
     serviceRemove: (id) => actions.removeService(id),
 
     /* new customer job */
+    /*
+       Garage-side job creation. Creates an empty job (customer + vehicle); the
+       garage then opens the quote builder to price the work.
+    */
+    newGarageJob: () => {
+      openModal({
+        title: "New job",
+        subtitle:
+          "Records the customer and vehicle. Nothing is priced yet — the next step is a quote.",
+        body: `
+          <div class="field"><label>Customer name</label>
+            <input name="customerName" placeholder="e.g. Dana Whitfield" required></div>
+          <div class="field"><label>Customer email</label>
+            <input name="customerEmail" type="email" placeholder="dana@example.com"></div>
+          <div class="field"><label>Make</label>
+            <input name="make" placeholder="Ford" required></div>
+          <div class="field"><label>Model</label>
+            <input name="model" placeholder="Focus" required></div>
+          <div class="field"><label>Year</label>
+            <input name="year" type="number" value="2018" min="1950" max="2100" required></div>
+          <div class="field"><label>Plate</label>
+            <input name="plate" placeholder="AB-1234" required></div>
+          <div class="field"><label>Odometer (mi)</label>
+            <input name="odometer" type="number" min="0" value="0"></div>
+          <div class="field"><label>Reported complaint</label>
+            <textarea name="complaint" placeholder="Grinding noise from the front when braking."></textarea></div>`,
+        submitLabel: "Create job",
+        onSubmit: (fd) => {
+          const id = actions.createJob({
+            customerName: fd.get("customerName"),
+            customerEmail: fd.get("customerEmail"),
+            make: fd.get("make"),
+            model: fd.get("model"),
+            year: fd.get("year"),
+            plate: fd.get("plate"),
+            odometer: fd.get("odometer"),
+            complaint: fd.get("complaint"),
+          });
+          actions.selectJob(id);
+        },
+      });
+    },
+
+    /* customer-side request (unchanged flow) */
     newJob: () => {
       openModal({
         title: "New service request",

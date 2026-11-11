@@ -155,7 +155,7 @@ button {
   border-radius: 999px;
   font-size: 13px;
   font-weight: 550;
-  color: var(--ink-2);
+  color: var(--neutral);
   transition: 0.15s;
 }
 .segmented button:hover {
@@ -242,7 +242,7 @@ button {
   margin-left: auto;
   font-size: 12px;
   font-weight: 650;
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 
 .side-note {
@@ -256,7 +256,7 @@ button {
   line-height: 1.5;
 }
 .side-note b {
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 
 /* ---------------- generic card ---------------- */
@@ -335,7 +335,7 @@ button {
   gap: 18px;
   flex-wrap: wrap;
   font-size: 12.5px;
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 .jobhead__meta span b {
   color: var(--ink);
@@ -364,7 +364,7 @@ button {
   transition: 0.14s;
 }
 .tabs button:hover {
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 .tabs button.is-active {
   color: var(--brand-ink);
@@ -374,7 +374,7 @@ button {
   display: inline-block;
   margin-left: 6px;
   background: var(--neutral-soft);
-  color: var(--ink-2);
+  color: var(--neutral);
   border-radius: 999px;
   padding: 0 6px;
   font-size: 11px;
@@ -410,7 +410,7 @@ button {
 .btn--ghost {
   background: var(--surface);
   border-color: var(--line-strong);
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 .btn--ghost:hover {
   background: var(--surface-2);
@@ -562,6 +562,123 @@ button {
   color: #a52a2a;
 }
 
+/* ---------------- quote → invoice badge ---------------- */
+/* Answers "has this quote been invoiced, and where?" at a glance. */
+.badge {
+  display: inline-block;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.5;
+  cursor: default;
+  font-family: inherit;
+}
+button.badge {
+  cursor: pointer;
+}
+button.badge:hover {
+  filter: brightness(0.96);
+  text-decoration: underline;
+}
+.badge--none {
+  background: var(--neutral-soft);
+  color: var(--neutral);
+  border-color: var(--line);
+}
+.badge--invoiced {
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+  border-color: var(--brand-soft);
+}
+.badge--void {
+  background: var(--neutral-soft);
+  color: var(--neutral);
+  border-color: var(--line);
+  text-decoration: line-through;
+}
+
+/* ---------------- voided invoices accordion ---------------- */
+.voided-acc {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.voided-acc > summary,
+.voided-doc > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.voided-acc > summary::-webkit-details-marker,
+.voided-doc > summary::-webkit-details-marker {
+  display: none;
+}
+.voided-acc > summary:hover,
+.voided-doc > summary:hover {
+  background: var(--neutral-soft);
+}
+.voided-acc__chev {
+  display: inline-block;
+  transition: transform 0.15s;
+  color: var(--muted);
+  font-size: 11px;
+}
+.voided-acc[open] > summary .voided-acc__chev,
+.voided-doc[open] > summary .voided-acc__chev {
+  transform: rotate(90deg);
+}
+.voided-acc__title {
+  font-weight: 650;
+  font-size: 13.5px;
+  color: var(--ink);
+}
+.voided-acc__count {
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--neutral-soft);
+  color: var(--neutral);
+}
+.voided-acc__hint {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+.voided-acc__body {
+  border-top: 1px solid var(--line);
+  padding: 0 0 6px;
+}
+.voided-acc__docs {
+  padding: 6px 18px 10px;
+}
+.voided-doc {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  background: var(--bg);
+}
+.voided-doc > summary {
+  padding: 9px 14px;
+}
+.voided-doc .card {
+  margin: 0 10px 10px;
+}
+
+/* carried-forward row on a consolidated invoice */
+.totals__row--carried span:last-child {
+  color: var(--violet);
+  font-weight: 600;
+}
+
 /* ---------------- tables ---------------- */
 .table {
   width: 100%;
@@ -633,7 +750,7 @@ button {
   gap: 16px;
   padding: 6px 0;
   font-size: 13px;
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 .totals__row span:last-child {
   font-variant-numeric: tabular-nums;
@@ -789,7 +906,7 @@ button {
   gap: 6px;
 }
 .turn-hint b {
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 
 /* ---------------- timeline ---------------- */
@@ -863,7 +980,7 @@ button {
 }
 .tl__note {
   font-size: 12.5px;
-  color: var(--ink-2);
+  color: var(--neutral);
   margin-top: 3px;
 }
 .tl__delta {
@@ -900,7 +1017,7 @@ button {
 .doc__meta {
   text-align: right;
   font-size: 12.5px;
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 .doc__meta div {
   margin-bottom: 3px;
@@ -914,7 +1031,7 @@ button {
   flex-wrap: wrap;
   margin-bottom: 16px;
   font-size: 12.5px;
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 
 /* ---------------- voided documents ---------------- */
@@ -926,10 +1043,10 @@ button {
 .doc--void .doc__no {
   text-decoration: line-through;
   text-decoration-thickness: 2px;
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 .doc--void .table {
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 
 /* ---------------- forms ---------------- */
@@ -940,7 +1057,7 @@ button {
   display: block;
   font-size: 11.5px;
   font-weight: 650;
-  color: var(--ink-2);
+  color: var(--neutral);
   margin-bottom: 5px;
 }
 .field input,
@@ -975,7 +1092,7 @@ button {
   gap: 9px;
   align-items: flex-start;
   font-size: 12.5px;
-  color: var(--ink-2);
+  color: var(--neutral);
   margin: 4px 0 12px;
 }
 .checkline input {
@@ -1088,7 +1205,7 @@ button {
   background: var(--surface);
 }
 .empty h4 {
-  color: var(--ink-2);
+  color: var(--neutral);
   font-size: 14px;
   margin-bottom: 5px;
 }
@@ -1137,7 +1254,7 @@ button {
   border-radius: 8px;
   font-size: 12.5px;
   font-weight: 600;
-  color: var(--ink-2);
+  color: var(--neutral);
   transition: 0.14s;
 }
 .navlist button:hover {
@@ -1187,7 +1304,7 @@ button {
 }
 
 .totals__row--tax span:first-child {
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 .totals__row--tax span:last-child {
   color: var(--info);
@@ -1202,7 +1319,7 @@ button {
   font: inherit;
   font-size: 11.5px;
   background: var(--surface);
-  color: var(--ink-2);
+  color: var(--neutral);
   cursor: pointer;
 }
 .table select.tax-select:focus {
@@ -1255,7 +1372,7 @@ button {
 .picker__price {
   font-variant-numeric: tabular-nums;
   font-weight: 650;
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 
 /* ---------------- quote builder ---------------- */
@@ -1305,7 +1422,7 @@ button {
   padding: 4px 10px;
   font-size: 11.5px;
   font-weight: 600;
-  color: var(--ink-2);
+  color: var(--neutral);
   cursor: pointer;
   transition: 0.14s;
 }
@@ -1352,7 +1469,7 @@ button {
   gap: 6px;
   font-size: 12px;
   font-weight: 650;
-  color: var(--ink-2);
+  color: var(--neutral);
   font-variant-numeric: tabular-nums;
 }
 .svc-row__meta .taxchip {
@@ -1371,7 +1488,7 @@ button {
   gap: 6px;
   font-size: 12px;
   font-weight: 650;
-  color: var(--ink-2);
+  color: var(--neutral);
 }
 .inline-field select,
 .inline-field input {

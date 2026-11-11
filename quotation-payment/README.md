@@ -35,6 +35,17 @@ garage clicks **Accept & lock**, and the audit trail records the decision and th
 
 ## What's new in this round
 
+### 0. Garage-side job creation, per-payment balances, quote→invoice traceability
+
+- **+ New job** in the sidebar (garage role): customer + vehicle + complaint → job in `QUOTING`. Nothing priced yet; the next click is **+ New quote**.
+- **Remaining balance on every payment**: the Payments ledger has a **Remaining after** column, and each invoice card shows `Total · paid · remaining`.
+- **Quote → invoice badge** on every quote card: **Not invoiced** / **Invoiced → INV-####** (clickable) / **Voided → INV-####**. Invoices print **From quote Q-####**.
+- **Generate** issues one invoice per accepted-but-un-invoiced quote; disabled with _"Nothing new to invoice"_ when there is nothing to bill.
+- **Voided invoices** are now a collapsed accordion; each row opens its frozen document.
+- **Multiple live invoices per job** are supported and summed in an "All live invoices" table.
+- Currency is `£` (`CURRENCY = "GBP"` at the top of `js/store.js`).
+- `syncInvoice()` is now **invoice-scoped** — with several live invoices a job-wide paid total would double-count.
+
 ### 1. Tax engine (percent **and** fixed, inclusive supported)
 
 Garage → **Taxes** in the sidebar.
@@ -111,43 +122,60 @@ Also: when an add-on is accepted mid-job, the invoice is flagged **"Accepted wor
 
 ### 4. Invoice versions, voiding & reissue
 
-A tax invoice is **never edited and never deleted** once it has been issued. Two different problems, two different mechanisms:
+A tax invoice is **never edited and never deleted** once it has been issued. There are **three distinct mechanisms**, and they are not interchangeable:
 
-| Problem                                 | Mechanism                                            |
-| --------------------------------------- | ---------------------------------------------------- |
-| The document is **wrong** (wrong quote) | **Void** it — allowed only while nothing is paid     |
-| The document is merely **out of date**  | A **new version** replaces it (automatic on payment) |
+| Situation                                                  | Mechanism                                                                         |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| The document is **wrong** (wrong quote, wrong customer)    | **Void** it — allowed only while nothing is paid                                  |
+| The document is **out of date** because new work was added | A **new invoice** for the extra work is issued; the live one is untouched         |
+| You want **one page for the customer**                     | **Generate combined invoice** — merges every live invoice and voids the originals |
+| _Optional_ (`reissueInvoiceOnPayment = true`)              | Every payment issues a new version and voids the previous one                     |
+
+**Default is `reissueInvoiceOnPayment = false`.** Payments accumulate on the live invoice and each one produces a receipt. Voiding is reserved for the explicit combine action, so the void history stays short and readable.
 
 ```
-Record a payment (reissueInvoiceOnPayment = true, the default)
-      │
-      ├─ INV-5004 issued   seq 2 · supersedes INV-5003 · paid-to-date · new balance
-      ├─ INV-5003 → VOID   reason "Superseded by INV-5004" · figures frozen
-      └─ RCP-7003 → VOID   RCP-7004 becomes the one valid receipt on the job
+Base quote £1,000
+  ├─[Generate]────────────► INV-1 £1,000  live
+  │    Pay £200 ──────────► INV-1  paid £200 · left £800 · RCP-1
+  │    Pay £200 ──────────► INV-1  paid £400 · left £600 · RCP-2
+  ├─ add-on accepted (£120)
+  ├─[Generate]────────────► INV-2 £120     live   (INV-1 unchanged)
+  └─[Combine]─────────────► INV-1 + INV-2 → VOID
+                             INV-3 £1,120
+                              ├─ lines from both quotes
+                              ├─ Paid on consolidated invoices  −£400
+                              └─ Remaining to pay               £600 · RCP-3
 ```
-
-Try it: **JC-1044** → Invoice tab → _Record payment_ on the remaining balance. The bill now shows `INV-5004 · Version 2 · replaces INV-5003`, a **Voided versions** block and a frozen copy of `INV-5003`. The Payments ledger marks the payment as having landed on a since-voided invoice.
 
 **Rules**
 
-| Situation                          | Behaviour                                                                                                                                    |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| A payment is recorded              | New version `seq + 1`, old version `VOID`, both linked by `supersedes` / `supersededBy`                                                      |
-| Paid-to-date                       | Summed **across every version of the job**, not per document                                                                                 |
-| Garage voids an **unpaid** invoice | Document flagged `VOID` with the reason; no replacement is created; job returns to **Awaiting Invoice**                                      |
-| Garage voids a **paid** invoice    | Refused — the toast explains that paid paper is replaced by a version, not voided                                                            |
-| Payment on a void invoice          | Refused (`That invoice is void — collect against the current one`)                                                                           |
-| Regenerate after a void            | New number, chain continues (`seq` keeps counting, `supersedes` points at the void document)                                                 |
-| Viewing a void document            | Read-only, "Void — not payable", totals frozen at the moment of voiding, never payable                                                       |
-| Credit note from a refund          | Always attaches to the **live** version, never to a void one                                                                                 |
-| Receipts                           | Exactly one `VALID` receipt per job; every earlier one becomes `VOID`                                                                        |
-| `reissueInvoiceOnPayment = false`  | The same invoice is re-synced in place and only a receipt is added (no versions). It is a flag in `js/store.js`, there is no settings screen |
+| Situation                          | Behaviour                                                                                                                                                       |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Press **Generate**                 | Issues one invoice per accepted-but-un-invoiced quote. Idempotent — a quote is stamped `invoicedAt`, so pressing twice creates nothing new                      |
+| Press **Generate** with none left  | Button is disabled with "Nothing new to invoice"                                                                                                                |
+| Press **Combine**                  | Needs at least **2 live invoices**; otherwise disabled. Voids them all and issues one combined document                                                         |
+| Combined invoice                   | Stores `combinedFromInvoiceIds[]` and `carriedPaid`, so it prints "Paid on consolidated invoices" and the balance still adds up                                 |
+| Paid-to-date on an invoice         | Summed **for that invoice only** — never job-wide, otherwise two live invoices would each show the same money                                                   |
+| Garage voids an **unpaid** invoice | Document flagged `VOID` with the reason; no replacement; the job returns to **Awaiting Invoice**                                                                |
+| Garage voids a **paid** invoice    | Refused — paid paper is replaced by a version or a combined invoice, never voided                                                                               |
+| Payment on a void invoice          | Refused (`That invoice is void — collect against the current one`)                                                                                              |
+| Quoting which document covers what | Quote card badge: **Not invoiced** / **Invoiced → INV-####** (click jumps to the Invoice tab) / **Voided → INV-####**; the invoice prints **From quote Q-####** |
+| Viewing a void document            | Nested inside a collapsed **Voided invoices** accordion; read-only, totals frozen at the moment of voiding, never payable                                       |
+| Credit note from a refund          | Always attaches to the **live** version, never to a void one                                                                                                    |
+| Receipts                           | One `VALID` receipt per payment; superseded receipts (reissue mode) become `VOID`                                                                               |
+| `reissueInvoiceOnPayment = true`   | Every payment issues `seq + 1`, voids the previous, re-points its payments and receipts at the replacement. Toggle lives on the Invoice tab                     |
 
 ## Flows you can still click
 
 | Flow                                                   | Where                                                                    |
 | ------------------------------------------------------ | ------------------------------------------------------------------------ |
+| **Create a job (garage side)**                         | Sidebar → **+ New job** (customer + vehicle, then quote it)              |
 | **Build / edit a quote**                               | Overview or Quotes tab → **+ New quote** (full-screen builder)           |
+| **See which quote has an invoice**                     | Quotes tab → badge on each card: _Not invoiced_ / _Invoiced → INV-####_  |
+| **Generate an invoice for accepted work**              | Invoice tab → **Generate** (lists exactly what will be issued)           |
+| **Combine live invoices into one**                     | Invoice tab → **Combine** (voids the originals, carries paid forward)    |
+| **See the balance after each payment**                 | Payments tab → ledger column **Remaining after**                         |
+| **Inspect voided invoices**                            | Invoice tab → collapsed **Voided invoices** accordion                    |
 | **Create a service from scratch**                      | Builder → _+ Create new service_ (also lands in the catalog)             |
 | **Edit services**                                      | Catalog → row → _Edit_ / _Remove_                                        |
 | Counter-offer / accept / reject / conditions           | Quotes tab                                                               |
@@ -168,9 +196,9 @@ Everything below is enforced in `js/store.js`. The views only render what the en
 
 ### 1. Money
 
-- **Money is integer cents everywhere.** `$95.00` is stored as `9500`; formatting happens once, at render time, through `money()`.
+- **Money is integer minor units everywhere.** `£95.00` is stored as `9500`; formatting happens once, at render time, through `money()`. Change `CURRENCY` / `LOCALE` at the top of `js/store.js` to switch the display currency.
 - **One calculator**: `docTotals(lines)` is used by quotes _and_ invoices, so a quote and the invoice made from it can never disagree.
-- `balance = total − paid`. A refund returns money but never re-opens a debt — it emits a Credit Note instead.
+- `balance = total − carriedPaid − payments on this invoice`. A refund returns money but never re-opens a debt — it emits a Credit Note instead.
 - **Vehicle Hold** is derived, never stored by hand: `balance > 0` on a **tax invoice** only. Proformas and warranty documents never create a hold.
 - Rounding is done on cents with `Math.round`, per line, before summing.
 
@@ -211,15 +239,18 @@ Everything below is enforced in `js/store.js`. The views only render what the en
 
 ### 5. Invoice versions & voiding
 
-- **One live version at a time.** `sel.stdInvoice(jobId)` returns the non-`VOID` tax invoice; `sel.voidedInvoices()` and `sel.invoiceVersions()` give the history.
+- **Live invoices**: `sel.liveInvoices(jobId)` returns every non-`VOID` tax invoice — a job can hold more than one on purpose. `sel.stdInvoice(jobId)` returns the first, for convenience. `sel.voidedInvoices()` gives the history.
 - **Freeze on void**: `syncInvoice()` returns immediately for a `VOID` document, so its `total`, `amountPaid` and `balance` stay exactly as they were when it was voided.
-- **Void is never a delete.** The row keeps `voidedAt`, `voidReason`, and the link forward (`supersededBy`).
-- **Two ways to void:**
-  - _Automatic_ (payment): issue the replacement first (it needs the new number), then void the previous one with `"Superseded by INV-####"`.
-  - _Manual_ (garage): only when `amountPaid === 0`; requires a written reason; creates no replacement, so the job drops back to `AWAITING_INVOICE` and nothing is payable until a new document is issued.
-- **A paid invoice can never be voided.** Money forces a new version; that is the whole point of the reissue flow.
+- **Void is never a delete.** The row keeps `voidedAt`, `voidReason`, the link forward (`supersededBy`), and — on a combined document — `combinedFromInvoiceIds[]` plus `carriedPaid`.
+- **Paid-to-date is per invoice.** `invoicePaid(id)` / `invoiceRefunded(id)` scope the money to the document. A job-wide total would show the same receipts on every live invoice.
+- **`carriedPaid`** holds money received on documents that were merged into a combined invoice, so `balance = total − carriedPaid − payments on this invoice` always reconciles.
+- **Three ways to void:**
+  - _Combine_ (garage, deliberate): voids every live invoice with `"Consolidated into INV-####"` and issues one replacement carrying `carriedPaid`.
+  - _Manual_ (garage): only when `amountPaid === 0`; requires a written reason; creates no replacement, so the job drops back to `AWAITING_INVOICE`.
+  - _Reissue on payment_ (only if `reissueInvoiceOnPayment = true`): issues the replacement first, re-points the payments and receipts at it, then voids the previous one with `"Superseded by INV-####"`.
+- **A paid invoice can never be voided manually.** Money forces a new version or a combine.
 - **No payment can land on a void invoice** — guarded in `recordPayment()` _and_ hidden in the UI (void versions are filtered out of the Payments tab).
-- **Receipts follow the same discipline**: exactly one `VALID` receipt per job, snapshots of `paidToDate` / `balanceAfter`, the rest `VOID` with `supersededBy`.
+- **Receipts follow the same discipline**: one `VALID` receipt per payment, snapshots of `paidToDate` / `balanceAfter`; superseded ones become `VOID`. With the default settings every payment keeps its own valid receipt.
 - **Credit notes always target the live version** (`completeRefundRecord()` resolves `stdInvoice(jobId) || original`).
 - Voided documents render read-only, watermarked _"Void — not payable"_, with the figures frozen at void time.
 
@@ -255,70 +286,78 @@ Everything below is enforced in `js/store.js`. The views only render what the en
 - Pay a proforma, a warranty document or a **void** invoice.
 - Void a **paid** invoice.
 - Take a refund larger than the payment.
+- Combine fewer than **two** live invoices.
 - Create an invoice before a quote is accepted.
-- Overwrite an issued document: it is either **versioned** or **voided**, never rewritten.
+- Overwrite an issued document: it is either **versioned**, **consolidated** or **voided**, never rewritten.
 
 ## Data model
 
-| Entity                 | Fields                                                                                                                                                                                                                                                                                             |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Job**                | `id, jobNo, garageName, customerName, customerEmail, vehicle{year,make,model,plate,vin,odometer}, status, createdAt, pausedReason, dependsOnQuoteId`                                                                                                                                               |
-| **Quote**              | `id, jobId, no, type, status, createdByRole, parentQuoteId, originalInvoiceId, items[], conditions[], revisions[], hasDependency, isChangeOrder, depositType, depositValue, expiryDate, revision, createdAt, acceptedAt, rejectedAt, lockedAt, invoicedAt?`                                        |
-| **Quote line**         | `id, kind, description, qty, unitPrice, serviceId?, packageRef?, standaloneUnitPrice?, unitPriceOriginal?, taxId, taxCode, taxName, taxKind, taxValue, taxInclusive`                                                                                                                               |
-| **Invoice / document** | `id, jobId, quoteId, no, kind, originalInvoiceId, settlementQuoteId, supersedes, supersededBy, voidedAt, voidReason, seq, paymentId, lines[], issuedAt, dueAt, depositRequired, depositType, depositValue, status, subtotal, taxTotal, taxes[], total, amountPaid, refunded, balance, vehicleHold` |
-| **Invoice line**       | quote-line snapshot + `quoteId, quoteType, isAddon`                                                                                                                                                                                                                                                |
-| **Payment**            | `id, invoiceId, no, amount, type, method, status, paidAt`                                                                                                                                                                                                                                          |
-| **Receipt**            | `id, paymentId, invoiceId, jobId, no, status, issuedAt, emailedTo, paidToDate, balanceAfter, supersededBy, voidedAt`                                                                                                                                                                               |
-| **Refund**             | `id, invoiceId, paymentId, amount, type, reason, status, requestedBy, createdAt, decidedAt, creditNoteId`                                                                                                                                                                                          |
-| **Credit note**        | `id, invoiceId, refundId, no, amount, reason, issuedAt`                                                                                                                                                                                                                                            |
-| **Cancellation**       | `id, jobId, reason, status, requestedBy, settlementQuoteId, createdAt, resolvedAt`                                                                                                                                                                                                                 |
-| **Storage**            | `id, jobId, invoiceId, days, rate, amount, at`                                                                                                                                                                                                                                                     |
-| **Timeline**           | `id, jobId, quoteId, actor, action, note, amountBefore, amountAfter, at`                                                                                                                                                                                                                           |
-| **Tax**                | `id, code, name, kind, value, inclusive, appliesTo[], effectiveFrom, effectiveTo, active, supersededBy`                                                                                                                                                                                            |
-| **Service**            | `id, name, category, price, taxCode, unit`                                                                                                                                                                                                                                                         |
+| Entity                 | Fields                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Job**                | `id, jobNo, garageName, customerName, customerEmail, vehicle{year,make,model,plate,vin,odometer}, status, createdAt, pausedReason, dependsOnQuoteId`                                                                                                                                                                                                  |
+| **Quote**              | `id, jobId, no, type, status, createdByRole, parentQuoteId, originalInvoiceId, items[], conditions[], revisions[], hasDependency, isChangeOrder, depositType, depositValue, expiryDate, revision, createdAt, acceptedAt, rejectedAt, lockedAt, invoicedAt, invoiceIds[]`                                                                              |
+| **Quote line**         | `id, kind, description, qty, unitPrice, serviceId?, packageRef?, standaloneUnitPrice?, unitPriceOriginal?, taxId, taxCode, taxName, taxKind, taxValue, taxInclusive`                                                                                                                                                                                  |
+| **Invoice / document** | `id, jobId, quoteId, no, kind, originalInvoiceId, settlementQuoteId, supersedes, supersededBy, voidedAt, voidReason, seq, paymentId, carriedPaid, combinedFromInvoiceIds[], isCombined, lines[], issuedAt, dueAt, depositRequired, depositType, depositValue, status, subtotal, taxTotal, taxes[], total, amountPaid, refunded, balance, vehicleHold` |
+| **Invoice line**       | quote-line snapshot + `quoteId, quoteType, isAddon`                                                                                                                                                                                                                                                                                                   |
+| **Payment**            | `id, invoiceId, no, amount, type, method, status, paidAt`                                                                                                                                                                                                                                                                                             |
+| **Receipt**            | `id, paymentId, invoiceId, jobId, no, status, issuedAt, emailedTo, paidToDate, balanceAfter, supersededBy, voidedAt`                                                                                                                                                                                                                                  |
+| **Refund**             | `id, invoiceId, paymentId, amount, type, reason, status, requestedBy, createdAt, decidedAt, creditNoteId`                                                                                                                                                                                                                                             |
+| **Credit note**        | `id, invoiceId, refundId, no, amount, reason, issuedAt`                                                                                                                                                                                                                                                                                               |
+| **Cancellation**       | `id, jobId, reason, status, requestedBy, settlementQuoteId, createdAt, resolvedAt`                                                                                                                                                                                                                                                                    |
+| **Storage**            | `id, jobId, invoiceId, days, rate, amount, at`                                                                                                                                                                                                                                                                                                        |
+| **Timeline**           | `id, jobId, quoteId, actor, action, note, amountBefore, amountAfter, at`                                                                                                                                                                                                                                                                              |
+| **Tax**                | `id, code, name, kind, value, inclusive, appliesTo[], effectiveFrom, effectiveTo, active, supersededBy`                                                                                                                                                                                                                                               |
+| **Service**            | `id, name, category, price, taxCode, unit`                                                                                                                                                                                                                                                                                                            |
 
 ## Function reference (`js/store.js`)
 
 ### Pure helpers (exported on `Store`)
 
-| Function                                                                                | Does                                                                                              |
-| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `money(cents)`                                                                          | formats integer cents as `$1,234.56`                                                              |
-| `fmtDateTime(iso)` / `fmtDay(iso)`                                                      | short date-time / date, `—` when empty                                                            |
-| `uid(prefix)` / `nowISO()` / `addDays(iso, n)`                                          | ids, timestamps, date arithmetic                                                                  |
-| `setLineTax(line, tax)`                                                                 | copies the tax definition onto the line (the snapshot)                                            |
-| `lineMath(line)`                                                                        | `{ gross, net, tax }` for one line, honouring inclusive/fixed                                     |
-| `docTotals(lines)`                                                                      | `{ subtotal, taxTotal, total, taxes[] }` — the one calculator                                     |
-| `quoteTotals(q)` / `lineTotal(line)`                                                    | totals for a quote / one line                                                                     |
-| `depositFor(q)`                                                                         | deposit in cents from `depositType` (`NONE/PERCENT/FLAT`)                                         |
-| `syncInvoice(inv)`                                                                      | recomputes totals, `amountPaid`, `balance`, `status`, `vehicleHold`; **returns early for `VOID`** |
-| `taxById` / `taxByCode` / `activeTaxes` / `defaultTaxFor` / `taxLabel` / `taxRateLabel` | tax lookups and labels                                                                            |
-| `buildLines(jobId)`                                                                     | accepted base + add-on lines ready to invoice (`{ lines, base, addons, settlement }`)             |
-| `invoiceNeedsUpdate(jobId)`                                                             | `null` or `{ delta, lines }` for "accepted work not yet billed"                                   |
-| `seed()`                                                                                | resets the demo to the three seed jobs                                                            |
-| `actions`                                                                               | the workflow API (below)                                                                          |
+| Function                                                                                | Does                                                                                                                     |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `money(cents)`                                                                          | formats integer cents as `£1,234.56` (`CURRENCY` / `LOCALE` constants at the top of `store.js`)                          |
+| `fmtDateTime(iso)` / `fmtDay(iso)`                                                      | short date-time / date, `—` when empty                                                                                   |
+| `uid(prefix)` / `nowISO()` / `addDays(iso, n)`                                          | ids, timestamps, date arithmetic                                                                                         |
+| `setLineTax(line, tax)`                                                                 | copies the tax definition onto the line (the snapshot)                                                                   |
+| `lineMath(line)`                                                                        | `{ gross, net, tax }` for one line, honouring inclusive/fixed                                                            |
+| `docTotals(lines)`                                                                      | `{ subtotal, taxTotal, total, taxes[] }` — the one calculator                                                            |
+| `quoteTotals(q)` / `lineTotal(line)`                                                    | totals for a quote / one line                                                                                            |
+| `depositFor(q)`                                                                         | deposit in cents from `depositType` (`NONE/PERCENT/FLAT`)                                                                |
+| `syncInvoice(inv)`                                                                      | recomputes totals, `balance`, `status`, `vehicleHold` from **that invoice's own** payments; **returns early for `VOID`** |
+| `linesForQuote(q)`                                                                      | invoice lines for a single quote                                                                                         |
+| `taxById` / `taxByCode` / `activeTaxes` / `defaultTaxFor` / `taxLabel` / `taxRateLabel` | tax lookups and labels                                                                                                   |
+| `buildLines(jobId)`                                                                     | every accepted line on the job, ready to compare against                                                                 |
+| `invoiceNeedsUpdate(jobId)`                                                             | `null` or `{ delta, lines, quotes }` for accepted work not yet on any live invoice                                       |
+| `seed()`                                                                                | resets the demo to the three seed jobs                                                                                   |
+| `actions`                                                                               | the workflow API (below)                                                                                                 |
 
 Internal (not exported): `log()`, `nextQuoteNo()`, `linesFromQuote()`, `jobPaid()`, `jobRefunded()`, `completeRefundRecord()`, `openBuilder()`.
 
 ### Selectors (`Store.sel`)
 
-| Selector                                                   | Returns                                 |
-| ---------------------------------------------------------- | --------------------------------------- |
-| `job`, `quote`, `invoice`, `payment`, `receipt`, `service` | one record by id                        |
-| `receiptForPayment(pid)` / `receiptForInvoice(invId)`      | the receipt for a payment / invoice     |
-| `quotesForJob(jobId)`                                      | every quote, oldest first               |
-| `activeQuote(jobId)`                                       | the open one (`DRAFT`/pending)          |
-| `stdQuote(jobId)`                                          | the accepted `STANDARD` quote           |
-| `invoicesForJob(jobId)`                                    | every document on the job               |
-| `stdInvoice(jobId)`                                        | the **live** tax invoice (never `VOID`) |
-| `voidedInvoices(jobId)`                                    | the void history                        |
-| `invoiceVersions(jobId)`                                   | every tax invoice, sorted by `seq`      |
-| `openProforma(jobId)`                                      | the `ISSUED` proforma, if any           |
-| `receiptsForJob(jobId)`                                    | receipts (valid and void)               |
-| `paymentsForInvoice`, `paymentsForJob`                     | payments                                |
-| `refundsForJob`, `creditNotesForInvoice`                   | refunds and credit notes                |
-| `cancellationsForJob`, `openCancellation`                  | cancellation requests                   |
-| `storageForJob`, `timelineForJob`                          | storage fees, audit trail               |
+| Selector                                                   | Returns                                                        |
+| ---------------------------------------------------------- | -------------------------------------------------------------- |
+| `job`, `quote`, `invoice`, `payment`, `receipt`, `service` | one record by id                                               |
+| `receiptForPayment(pid)` / `receiptForInvoice(invId)`      | the receipt for a payment / invoice                            |
+| `quotesForJob(jobId)`                                      | every quote, oldest first                                      |
+| `activeQuote(jobId)`                                       | the open one (`DRAFT`/pending)                                 |
+| `stdQuote(jobId)`                                          | the accepted `STANDARD` quote                                  |
+| `invoicesForJob(jobId)`                                    | every document on the job                                      |
+| `liveInvoices(jobId)`                                      | every **non-void** tax invoice (can be more than one)          |
+| `stdInvoice(jobId)`                                        | the first live tax invoice (convenience)                       |
+| `voidedInvoices(jobId)`                                    | the void history                                               |
+| `invoiceVersions(jobId)`                                   | every tax invoice, sorted by `seq`                             |
+| `invoicesForQuote(quoteId)`                                | documents covering a quote, including combined ones            |
+| `quoteInvoiceStatus(quoteId)`                              | `{ invoiced, live, voided, total, latest }` — drives the badge |
+| `uninvoicedQuotes(jobId)`                                  | accepted quotes with no invoice yet — drives **Generate**      |
+| `jobTotals(jobId)`                                         | `{ total, paid, balance }` summed over live invoices           |
+| `balanceAfter(paymentId)`                                  | running balance shown on each payment ledger row               |
+| `openProforma(jobId)`                                      | the `ISSUED` proforma, if any                                  |
+| `receiptsForJob(jobId)`                                    | receipts (valid and void)                                      |
+| `paymentsForInvoice`, `paymentsForJob`                     | payments                                                       |
+| `refundsForJob`, `creditNotesForInvoice`                   | refunds and credit notes                                       |
+| `cancellationsForJob`, `openCancellation`                  | cancellation requests                                          |
+| `storageForJob`, `timelineForJob`                          | storage fees, audit trail                                      |
 
 ### Actions (`Store.actions`)
 
@@ -329,38 +368,40 @@ Internal (not exported): `log()`, `nextQuoteNo()`, `linesFromQuote()`, `jobPaid(
 | Quote editing   | `startEdit`, `cancelEdit`, `addItem`, `removeItem`, `setItemTax`, `addServices`, `toggleDependency`, `addCondition`                                                                                        |
 | Quote lifecycle | `saveEdit`, `sendQuote`, `acceptQuote`, `rejectQuote`                                                                                                                                                      |
 | New quotes      | `createGarageQuote`, `createSupplementary`, `createWarranty`, `createRfq`, `createSettlement`                                                                                                              |
-| Documents       | `generateProforma`, `generateInvoice`, **`voidInvoice(invoiceId, reason)`**                                                                                                                                |
+| Jobs            | **`createJob(payload)`** — garage opens a job (customer + vehicle), then quotes it                                                                                                                         |
+| Documents       | `generateProforma`, **`generateInvoices(jobId)`** (one per un-invoiced quote), **`generateCombinedInvoice(jobId)`**, **`voidInvoice(invoiceId, reason)`**                                                  |
 | Cancellation    | `requestCancellation`, `declineCancellation`                                                                                                                                                               |
 | Money           | `recordPayment`, `requestRefund`, `decideRefund`, `issueRefund`, `completeRefund`, `addStorageFee`                                                                                                         |
 | Tax / catalog   | `saveTax`, `deactivateTax`, `saveService`, `removeService`                                                                                                                                                 |
 
 ## Function reference (`js/views.js`)
 
-| Function                                              | Renders                                                               |
-| ----------------------------------------------------- | --------------------------------------------------------------------- |
-| `render()`                                            | the whole screen (role switch + sidebar + main)                       |
-| `renderSidebar()` / `renderMain()`                    | job list / the current screen                                         |
-| `jobHeader`, `tabs`, `tabBody`                        | job header, tab bar, active tab                                       |
-| `viewOverview`                                        | KPIs, Vehicle Hold banner, cancellation panel, workflow steps         |
-| `viewQuotes` → `quoteCard`                            | quote cards with lines, tax, totals, conditions, revisions, actions   |
-| `viewBill`                                            | proforma + live invoice + warranty docs + **voided versions**         |
-| `proformaDoc`, `invoiceDoc`, `linesTable`, `taxBlock` | document bodies (shared line/tax rendering)                           |
-| **`versionHistory(job, voided)`**                     | the voided-versions table                                             |
-| **`voidedDoc(job, inv)`**                             | a frozen, read-only, watermarked void document                        |
-| `viewPayments`                                        | payable cards (live invoices only) + payment ledger with void markers |
-| `viewRefunds`, `viewAudit`                            | refund workflow, audit timeline                                       |
-| `viewBuilder`                                         | full-screen builder (catalog + lines + deposit)                       |
-| `viewTaxes`, `viewCatalog`                            | tax engine screen, service catalog                                    |
+| Function                                              | Renders                                                                     |
+| ----------------------------------------------------- | --------------------------------------------------------------------------- |
+| `render()`                                            | the whole screen (role switch + sidebar + main)                             |
+| `renderSidebar()` / `renderMain()`                    | job list / the current screen                                               |
+| `jobHeader`, `tabs`, `tabBody`                        | job header, tab bar, active tab                                             |
+| `viewOverview`                                        | KPIs, Vehicle Hold banner, cancellation panel, workflow steps               |
+| `viewQuotes` → `quoteCard`                            | quote cards with lines, tax, totals, conditions, revisions, actions         |
+| `viewBill`                                            | proforma + live invoice + warranty docs + **voided versions**               |
+| `proformaDoc`, `invoiceDoc`, `linesTable`, `taxBlock` | document bodies (shared line/tax rendering)                                 |
+| `versionHistory(job, voided)`                         | the collapsed **Voided invoices** accordion (each row opens its frozen doc) |
+| `voidedDoc(job, inv)`                                 | a frozen, read-only, watermarked void document                              |
+| `invoiceBadge(q)`                                     | _Not invoiced_ / _Invoiced → INV-####_ / _Voided → INV-####_                |
+| `viewPayments`                                        | payable cards (live invoices only) + payment ledger with void markers       |
+| `viewRefunds`, `viewAudit`                            | refund workflow, audit timeline                                             |
+| `viewBuilder`                                         | full-screen builder (catalog + lines + deposit)                             |
+| `viewTaxes`, `viewCatalog`                            | tax engine screen, service catalog                                          |
 
 ## Function reference (`js/app.js`)
 
-| Function                                   | Does                                                                                                                                                 |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `toast(msg, kind)`                         | transient notification                                                                                                                               |
-| `openModal(opts)` / `closeModal()`         | modal shell, submit handling, focus                                                                                                                  |
-| `taxSelectOptions(code)`                   | tax dropdown markup                                                                                                                                  |
-| `handlers`                                 | one entry per `data-act` (navigation, builder, quotes, documents incl. **`voidInvoiceModal`**, payments, receipts, refunds, taxes, catalog, new job) |
-| click / input / change / keydown listeners | delegated events; live line editing keeps focus by patching `#lt-*` and `#qtotal-*` instead of re-rendering                                          |
+| Function                                   | Does                                                                                                                                                                                                                              |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `toast(msg, kind)`                         | transient notification                                                                                                                                                                                                            |
+| `openModal(opts)` / `closeModal()`         | modal shell, submit handling, focus                                                                                                                                                                                               |
+| `taxSelectOptions(code)`                   | tax dropdown markup                                                                                                                                                                                                               |
+| `handlers`                                 | one entry per `data-act` (navigation, builder, quotes, documents incl. **`generateInvoices`**, **`combinedModal`**, **`toggleReissue`**, **`voidInvoiceModal`**, **`newGarageJob`**, payments, receipts, refunds, taxes, catalog) |
+| click / input / change / keydown listeners | delegated events; live line editing keeps focus by patching `#lt-*` and `#qtotal-*` instead of re-rendering                                                                                                                       |
 
 ## Files
 
@@ -377,4 +418,4 @@ js/app.js           event delegation, modals, toasts, boot
 - Payments on a proforma (deposit against proforma)
 - Multi-tax stacking on a single line
 - Draft → issue step for invoices
-- A settings screen for `reissueInvoiceOnPayment` (the flag exists in `js/store.js`; there is no UI for it)
+- A settings screen for `reissueInvoiceOnPayment` — a toggle now lives on the Invoice tab, but it is not persisted across a reset
