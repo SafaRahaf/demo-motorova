@@ -43,6 +43,9 @@ garage clicks **Accept & lock**, and the audit trail records the decision and th
 - **Generate** issues one invoice per accepted-but-un-invoiced quote; disabled with _"Nothing new to invoice"_ when there is nothing to bill.
 - **Voided invoices** are now a collapsed accordion; each row opens its frozen document.
 - **Multiple live invoices per job** are supported and summed in an "All live invoices" table.
+- **Download / print** any invoice or receipt as PDF or a standalone `.html` file.
+- The invoice totals block lists **receipts** (payments in, not charges), with voided ones struck through.
+- **Combine with payments** consolidates documents _and_ receipts, issuing one consolidated receipt.
 - Currency is `£` (`CURRENCY = "GBP"` at the top of `js/store.js`).
 - `syncInvoice()` is now **invoice-scoped** — with several live invoices a job-wide paid total would double-count.
 
@@ -124,12 +127,13 @@ Also: when an add-on is accepted mid-job, the invoice is flagged **"Accepted wor
 
 A tax invoice is **never edited and never deleted** once it has been issued. There are **three distinct mechanisms**, and they are not interchangeable:
 
-| Situation                                                  | Mechanism                                                                         |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| The document is **wrong** (wrong quote, wrong customer)    | **Void** it — allowed only while nothing is paid                                  |
-| The document is **out of date** because new work was added | A **new invoice** for the extra work is issued; the live one is untouched         |
-| You want **one page for the customer**                     | **Generate combined invoice** — merges every live invoice and voids the originals |
-| _Optional_ (`reissueInvoiceOnPayment = true`)              | Every payment issues a new version and voids the previous one                     |
+| Situation                                                  | Mechanism                                                                                   |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| The document is **wrong** (wrong quote, wrong customer)    | **Void** it — allowed only while nothing is paid                                            |
+| The document is **out of date** because new work was added | A **new invoice** for the extra work is issued; the live one is untouched                   |
+| You want **one page for the customer**                     | **Combine invoices** — merges the documents; payments stay put and print as carried forward |
+| You want **one page and clean paperwork**                  | **Combine with payments** — merges documents, moves the money, voids the old receipts       |
+| _Optional_ (`reissueInvoiceOnPayment = true`)              | Every payment issues a new version and voids the previous one                               |
 
 **Default is `reissueInvoiceOnPayment = false`.** Payments accumulate on the live invoice and each one produces a receipt. Voiding is reserved for the explicit combine action, so the void history stays short and readable.
 
@@ -167,28 +171,30 @@ Base quote £1,000
 
 ## Flows you can still click
 
-| Flow                                                   | Where                                                                    |
-| ------------------------------------------------------ | ------------------------------------------------------------------------ |
-| **Create a job (garage side)**                         | Sidebar → **+ New job** (customer + vehicle, then quote it)              |
-| **Build / edit a quote**                               | Overview or Quotes tab → **+ New quote** (full-screen builder)           |
-| **See which quote has an invoice**                     | Quotes tab → badge on each card: _Not invoiced_ / _Invoiced → INV-####_  |
-| **Generate an invoice for accepted work**              | Invoice tab → **Generate** (lists exactly what will be issued)           |
-| **Combine live invoices into one**                     | Invoice tab → **Combine** (voids the originals, carries paid forward)    |
-| **See the balance after each payment**                 | Payments tab → ledger column **Remaining after**                         |
-| **Inspect voided invoices**                            | Invoice tab → collapsed **Voided invoices** accordion                    |
-| **Create a service from scratch**                      | Builder → _+ Create new service_ (also lands in the catalog)             |
-| **Edit services**                                      | Catalog → row → _Edit_ / _Remove_                                        |
-| Counter-offer / accept / reject / conditions           | Quotes tab                                                               |
-| Supplementary quote + dependency flag                  | Overview (garage) → _Supplementary quote_                                |
-| Cancellation → settlement → unbundle packages          | Overview → _Request cancellation_, then garage _Create settlement quote_ |
-| Deposit / balance / milestone payments + auto receipts | Payments tab (tax invoice only)                                          |
-| **Payment → new invoice version → old one voided**     | Payments / Invoice tab → _Record payment_                                |
-| **Void an unpaid invoice**                             | Invoice tab (garage) → _Void invoice_ → reason                           |
-| **See voided versions**                                | Invoice tab → _Voided versions_ block + frozen documents                 |
-| Refund request → approval → **Credit Note**            | Refunds tab                                                              |
-| Daily storage fees                                     | Overview (garage) → _Add storage fee_                                    |
-| Warranty rework at $0.00                               | Overview (garage) → _Warranty quote_                                     |
-| Full audit trail                                       | Audit trail tab                                                          |
+| Flow                                                   | Where                                                                     |
+| ------------------------------------------------------ | ------------------------------------------------------------------------- |
+| **Create a job (garage side)**                         | Sidebar → **+ New job** (customer + vehicle, then quote it)               |
+| **Build / edit a quote**                               | Overview or Quotes tab → **+ New quote** (full-screen builder)            |
+| **See which quote has an invoice**                     | Quotes tab → badge on each card: _Not invoiced_ / _Invoiced → INV-####_   |
+| **Generate an invoice for accepted work**              | Invoice tab → **Generate** (lists exactly what will be issued)            |
+| **Combine live invoices into one**                     | Invoice tab → **Combine invoices** (documents only; payments stay put)    |
+| **Consolidate documents + payments**                   | Invoice tab → **Combine with payments** (moves money, voids old receipts) |
+| **Download / print an invoice or receipt**             | Document footer → **Download**, or on a receipt → **Print / Save as PDF** |
+| **See the balance after each payment**                 | Payments tab → ledger column **Remaining after**                          |
+| **Inspect voided invoices**                            | Invoice tab → collapsed **Voided invoices** accordion                     |
+| **Create a service from scratch**                      | Builder → _+ Create new service_ (also lands in the catalog)              |
+| **Edit services**                                      | Catalog → row → _Edit_ / _Remove_                                         |
+| Counter-offer / accept / reject / conditions           | Quotes tab                                                                |
+| Supplementary quote + dependency flag                  | Overview (garage) → _Supplementary quote_                                 |
+| Cancellation → settlement → unbundle packages          | Overview → _Request cancellation_, then garage _Create settlement quote_  |
+| Deposit / balance / milestone payments + auto receipts | Payments tab (tax invoice only)                                           |
+| **Payment → new invoice version → old one voided**     | Payments / Invoice tab → _Record payment_                                 |
+| **Void an unpaid invoice**                             | Invoice tab (garage) → _Void invoice_ → reason                            |
+| **See voided versions**                                | Invoice tab → _Voided versions_ block + frozen documents                  |
+| Refund request → approval → **Credit Note**            | Refunds tab                                                               |
+| Daily storage fees                                     | Overview (garage) → _Add storage fee_                                     |
+| Warranty rework at $0.00                               | Overview (garage) → _Warranty quote_                                      |
+| Full audit trail                                       | Audit trail tab                                                           |
 
 ## The rules, in full
 
@@ -262,6 +268,42 @@ Everything below is enforced in `js/store.js`. The views only render what the en
 - Recording a deposit that covers `depositRequired` moves the job `AWAITING_DEPOSIT → IN_PROGRESS`.
 - Reaching `balance === 0` logs `HOLD_RELEASED` and flips the Vehicle Hold off.
 - A receipt is generated, emailed and timestamped on every successful payment.
+- **Receipts drive the balance.** `invoicePaid()` sums the invoice's **VALID** receipts, not its payment rows.
+  A `VOID` receipt stays visible on the document (struck through) but is **never** deducted, so a consolidated
+  invoice cannot subtract the same money twice.
+
+### 6b. Receipts printed on the invoice
+
+The invoice totals block ends with a **Receipts** panel (`receiptRows()`), deliberately styled apart from the
+charges and labelled _"payments received — not charges on this invoice"_:
+
+```
+Subtotal (excl. tax)                    £299.00
+VAT-STD 8.00%                            £19.20
+VAT-PRT 5.00%                             £2.95
+──────────────────────────────────────────────
+Total                                   £321.15
+── Receipts · payments received, not charges ──
+RCP-7003  Card · 12 Aug               −£96.35
+RCP-7004  Cash · 14 Aug              −£200.00
+──────────────────────────────────────────────
+Remaining balance                        £24.80
+```
+
+After **Combine with payments**, the earlier receipts appear here marked **VOID** (struck through, not
+deducted) beside the single valid consolidated receipt. Each row opens its receipt.
+
+### 6c. Downloading documents
+
+**Download** on every invoice footer offers two dependency-free outputs, both rendered by the same
+`Views.printableDoc()` so they can never drift:
+
+- **Print / Save as PDF** — opens a print window containing only the document (garage, customer, vehicle,
+  lines, tax breakdown, receipts, balance) and calls `window.print()`.
+- **Download .html** — saves a self-contained file (`INV-5005-BM2210.html`) with inlined CSS.
+
+Receipts have their own **Print / Save as PDF**. Voided documents print with a diagonal
+**VOID — NOT PAYABLE** watermark and their frozen figures.
 
 ### 7. Refunds & credit notes
 
@@ -300,7 +342,7 @@ Everything below is enforced in `js/store.js`. The views only render what the en
 | **Invoice / document** | `id, jobId, quoteId, no, kind, originalInvoiceId, settlementQuoteId, supersedes, supersededBy, voidedAt, voidReason, seq, paymentId, carriedPaid, combinedFromInvoiceIds[], isCombined, lines[], issuedAt, dueAt, depositRequired, depositType, depositValue, status, subtotal, taxTotal, taxes[], total, amountPaid, refunded, balance, vehicleHold` |
 | **Invoice line**       | quote-line snapshot + `quoteId, quoteType, isAddon`                                                                                                                                                                                                                                                                                                   |
 | **Payment**            | `id, invoiceId, no, amount, type, method, status, paidAt`                                                                                                                                                                                                                                                                                             |
-| **Receipt**            | `id, paymentId, invoiceId, jobId, no, status, issuedAt, emailedTo, paidToDate, balanceAfter, supersededBy, voidedAt`                                                                                                                                                                                                                                  |
+| **Receipt**            | `id, paymentId, invoiceId, jobId, no, status, amount, method, type, issuedAt, emailedTo, paidToDate, balanceAfter, supersededBy, voidedAt, voidReason`                                                                                                                                                                                                |
 | **Refund**             | `id, invoiceId, paymentId, amount, type, reason, status, requestedBy, createdAt, decidedAt, creditNoteId`                                                                                                                                                                                                                                             |
 | **Credit note**        | `id, invoiceId, refundId, no, amount, reason, issuedAt`                                                                                                                                                                                                                                                                                               |
 | **Cancellation**       | `id, jobId, reason, status, requestedBy, settlementQuoteId, createdAt, resolvedAt`                                                                                                                                                                                                                                                                    |
@@ -369,10 +411,18 @@ Internal (not exported): `log()`, `nextQuoteNo()`, `linesFromQuote()`, `jobPaid(
 | Quote lifecycle | `saveEdit`, `sendQuote`, `acceptQuote`, `rejectQuote`                                                                                                                                                      |
 | New quotes      | `createGarageQuote`, `createSupplementary`, `createWarranty`, `createRfq`, `createSettlement`                                                                                                              |
 | Jobs            | **`createJob(payload)`** — garage opens a job (customer + vehicle), then quotes it                                                                                                                         |
-| Documents       | `generateProforma`, **`generateInvoices(jobId)`** (one per un-invoiced quote), **`generateCombinedInvoice(jobId)`**, **`voidInvoice(invoiceId, reason)`**                                                  |
+| Documents       | `generateProforma`, `generateInvoices`, `generateCombinedInvoice`, `combineInvoicesWithPayments`, `voidInvoice`                                                                                            |
 | Cancellation    | `requestCancellation`, `declineCancellation`                                                                                                                                                               |
 | Money           | `recordPayment`, `requestRefund`, `decideRefund`, `issueRefund`, `completeRefund`, `addStorageFee`                                                                                                         |
 | Tax / catalog   | `saveTax`, `deactivateTax`, `saveService`, `removeService`                                                                                                                                                 |
+
+### Invoice actions in detail
+
+| Action                            | Void invoices? | Void receipts?                           | Money handling                           |
+| --------------------------------- | -------------- | ---------------------------------------- | ---------------------------------------- |
+| `generateInvoices(jobId)`         | no             | no                                       | none                                     |
+| `generateCombinedInvoice(jobId)`  | yes (≥2 live)  | no                                       | kept as `carriedPaid` on the new invoice |
+| `combineInvoicesWithPayments(id)` | yes            | **yes** + one consolidated valid receipt | payments re-pointed at the new invoice   |
 
 ## Function reference (`js/views.js`)
 
@@ -388,6 +438,8 @@ Internal (not exported): `log()`, `nextQuoteNo()`, `linesFromQuote()`, `jobPaid(
 | `versionHistory(job, voided)`                         | the collapsed **Voided invoices** accordion (each row opens its frozen doc) |
 | `voidedDoc(job, inv)`                                 | a frozen, read-only, watermarked void document                              |
 | `invoiceBadge(q)`                                     | _Not invoiced_ / _Invoiced → INV-####_ / _Voided → INV-####_                |
+| `receiptRows(inv)`                                    | the **Receipts** panel inside an invoice's totals block                     |
+| `printableDoc(inv)`                                   | standalone printable document (no app chrome; VOID watermark)               |
 | `viewPayments`                                        | payable cards (live invoices only) + payment ledger with void markers       |
 | `viewRefunds`, `viewAudit`                            | refund workflow, audit timeline                                             |
 | `viewBuilder`                                         | full-screen builder (catalog + lines + deposit)                             |
@@ -395,13 +447,17 @@ Internal (not exported): `log()`, `nextQuoteNo()`, `linesFromQuote()`, `jobPaid(
 
 ## Function reference (`js/app.js`)
 
-| Function                                   | Does                                                                                                                                                                                                                              |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `toast(msg, kind)`                         | transient notification                                                                                                                                                                                                            |
-| `openModal(opts)` / `closeModal()`         | modal shell, submit handling, focus                                                                                                                                                                                               |
-| `taxSelectOptions(code)`                   | tax dropdown markup                                                                                                                                                                                                               |
-| `handlers`                                 | one entry per `data-act` (navigation, builder, quotes, documents incl. **`generateInvoices`**, **`combinedModal`**, **`toggleReissue`**, **`voidInvoiceModal`**, **`newGarageJob`**, payments, receipts, refunds, taxes, catalog) |
-| click / input / change / keydown listeners | delegated events; live line editing keeps focus by patching `#lt-*` and `#qtotal-*` instead of re-rendering                                                                                                                       |
+| Function                                   | Does                                                                                                                                                                                                                                                                              |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `toast(msg, kind)`                         | transient notification                                                                                                                                                                                                                                                            |
+| `openModal(opts)` / `closeModal()`         | modal shell, submit handling, focus                                                                                                                                                                                                                                               |
+| `printablePage(body, title)`               | wraps a document in a styled, self-contained HTML page                                                                                                                                                                                                                            |
+| `downloadDoc` / `printDoc` / `saveHtmlDoc` | Download dialog, print-to-PDF, and standalone `.html` export                                                                                                                                                                                                                      |
+| `receiptModal` / `printReceipt`            | receipt detail and its printable copy                                                                                                                                                                                                                                             |
+| `combinedPaymentsModal`                    | confirm dialog for **Combine with payments** (lists what voids, what moves)                                                                                                                                                                                                       |
+| `taxSelectOptions(code)`                   | tax dropdown markup                                                                                                                                                                                                                                                               |
+| `handlers`                                 | one entry per `data-act` (navigation, builder, quotes, documents incl. **`generateInvoices`**, **`combinedModal`**, **`combinedPaymentsModal`**, **`downloadDoc`**, **`toggleReissue`**, **`voidInvoiceModal`**, **`newGarageJob`**, payments, receipts, refunds, taxes, catalog) |
+| click / input / change / keydown listeners | delegated events; live line editing keeps focus by patching `#lt-*` and `#qtotal-*` instead of re-rendering                                                                                                                                                                       |
 
 ## Files
 

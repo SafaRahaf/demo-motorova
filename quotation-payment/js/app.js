@@ -11,11 +11,55 @@
     money,
     actions,
     fmtDateTime,
+    fmtDay,
     activeTaxes,
     taxById,
     taxRateLabel,
     docTotals,
   } = St;
+  const Views = global.Views;
+
+  /*
+     Wrap a rendered document in a minimal, self-contained HTML page.
+     Inlined CSS means the downloaded file and the print window look identical
+     without loading css/app.css — no relative paths, no network.
+  */
+  function printablePage(bodyHtml, title) {
+    return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>${title}</title>
+<style>
+  :root{--ink:#0f172a;--muted:#6b7788;--line:#e2e7ef;}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px;font:13px/1.55 -apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:#fff;max-width:820px;margin:0 auto;position:relative}
+  .num{text-align:right;white-space:nowrap}
+  .d-mono{font-family:ui-monospace,Menlo,monospace}
+  .d-head{display:flex;justify-content:space-between;gap:24px;border-bottom:2px solid var(--ink);padding-bottom:14px}
+  .d-garage{font-size:18px;font-weight:800;letter-spacing:-.01em}
+  .d-meta{text-align:right}
+  .d-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .d-no{font-size:17px;font-weight:800;font-family:ui-monospace,Menlo,monospace}
+  .d-muted{color:var(--muted);font-size:12px}
+  .d-parties{display:flex;gap:40px;padding:18px 0;border-bottom:1px solid var(--line)}
+  .d-table{width:100%;border-collapse:collapse;margin:18px 0}
+  .d-table th{text-align:left;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--ink);padding:7px 8px}
+  .d-table td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
+  .d-tag{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:var(--muted)}
+  .d-tag--tax{background:#f4f6fa}
+  .d-totals{display:flex;justify-content:flex-end}
+  .d-totals table{border-collapse:collapse;min-width:320px}
+  .d-totals td{padding:5px 8px}
+  .d-totals td.num{text-align:right;white-space:nowrap}
+  .d-major td{border-top:1px solid var(--ink);font-weight:800;font-size:14px}
+  .d-section td{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-top:12px}
+  .d-due td{border-top:2px solid var(--ink);font-weight:800;font-size:15px;padding-top:8px}
+  .d-note{margin-top:18px;padding:10px 12px;background:#f7f9fc;border-left:3px solid var(--line);font-size:12px}
+  .d-foot{margin-top:28px;padding-top:12px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)}
+  .d-void-mark{position:fixed;top:42%;left:50%;transform:translate(-50%,-50%) rotate(-24deg);font-size:90px;font-weight:900;letter-spacing:.1em;color:rgba(192,38,38,.13);border:8px solid rgba(192,38,38,.13);border-radius:12px;padding:8px 32px;pointer-events:none;z-index:9}
+  @media print{body{padding:0}.d-void-mark{position:fixed}}
+  @page{margin:16mm}
+</style></head>
+<body>${bodyHtml}</body></html>`;
+  }
 
   /* ---------------- toast ---------------- */
   function toast(msg, kind) {
@@ -310,6 +354,191 @@
           actions.generateCombinedInvoice(jobId);
         },
       });
+    },
+
+    /*
+       Download a document. Two dependency-free options, both rendered by the
+       same `Views.printableDoc()` so the file and the printout always match:
+         · Print / Save as PDF — opens a print window with only the document
+         · Download .html      — saves a self-contained file with the styling
+    */
+    downloadDoc: (invId) => {
+      const inv = sel.invoice(invId);
+      if (!inv) return;
+      const job = sel.job(inv.jobId);
+      const slug = `${inv.no}-${(job.vehicle.plate || "vehicle").replace(/[^A-Za-z0-9]/g, "")}`;
+      openModal({
+        title: "Download " + inv.no,
+        subtitle: `${job.jobNo} · ${job.customerName} · ${money(inv.total)}${inv.status === "VOID" ? " · VOID" : ""}`,
+        body: `
+          <div class="row">
+            <button type="button" class="btn btn--primary" data-act="printDoc" data-id="${inv.id}">Print / Save as PDF</button>
+            <button type="button" class="btn btn--ghost" data-act="saveHtmlDoc" data-id="${inv.id}">Download .html</button>
+          </div>
+          <div class="banner banner--info" style="margin-top:14px">
+            <span class="banner__icon">&#8505;</span>
+            <div>Both produce the same layout: garage, customer, vehicle, line items, tax breakdown,
+            receipts and the remaining balance — with no app navigation around it.</div>
+          </div>
+          <div class="field" style="margin-top:12px">
+            <label>File name</label>
+            <input name="filename" value="${slug}" readonly>
+          </div>`,
+        submitLabel: "Close",
+        onSubmit: () => {},
+      });
+    },
+
+    printDoc: (invId) => {
+      const inv = sel.invoice(invId);
+      if (!inv) return;
+      const w = global.open("", "_blank", "width=900,height=1000");
+      if (!w) {
+        toast("Pop-up blocked — allow pop-ups to print the invoice.", "warn");
+        return;
+      }
+      w.document.write(
+        printablePage(
+          Views.printableDoc(inv),
+          `${inv.no} — ${sel.job(inv.jobId).garageName}`,
+        ),
+      );
+      w.document.close();
+      setTimeout(() => {
+        w.focus();
+        w.print();
+      }, 250);
+    },
+
+    saveHtmlDoc: (invId) => {
+      const inv = sel.invoice(invId);
+      if (!inv) return;
+      const job = sel.job(inv.jobId);
+      const name = `${inv.no}-${(job.vehicle.plate || "vehicle").replace(/[^A-Za-z0-9]/g, "")}.html`;
+      const html = printablePage(
+        Views.printableDoc(inv),
+        `${inv.no} — ${job.garageName}`,
+      );
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast(`${name} downloaded.`, "ok");
+    },
+
+    /* "Combine with payments" — confirm, then move money onto one document. */
+    combinedPaymentsModal: (jobId) => {
+      const live = sel
+        .liveInvoices(jobId)
+        .filter((i) => i.kind === "TAX_INVOICE");
+      const receipts = live.flatMap((i) =>
+        sel.receiptsForInvoice(i.id).filter((r) => r.status === "VALID"),
+      );
+      if (!receipts.length) {
+        toast("There are no payments to consolidate.", "warn");
+        return;
+      }
+      const totals = sel.jobTotals(jobId);
+      openModal({
+        title: "Combine invoices & payments",
+        subtitle:
+          "Money moves onto one document and the receipts are replaced by a single consolidated receipt.",
+        body: `
+          <table class="table table--compact">
+            <thead><tr><th>Invoice</th><th class="num">Total</th><th>Receipts to void</th></tr></thead>
+            <tbody>
+              ${live
+                .map(
+                  (i) => `<tr>
+                <td class="mono">${i.no}</td>
+                <td class="num">${money(i.total)}</td>
+                <td class="sub">${
+                  sel
+                    .receiptsForInvoice(i.id)
+                    .filter((r) => r.status === "VALID")
+                    .map((r) => r.no)
+                    .join(", ") || "—"
+                }</td>
+              </tr>`,
+                )
+                .join("")}
+            </tbody>
+          </table>
+          <table class="table table--compact" style="margin-top:10px">
+            <tbody>
+              <tr><td>Combined total</td><td class="num"><b>${money(totals.total)}</b></td></tr>
+              <tr><td>Payments moved (${receipts.length} receipts)</td><td class="num">&minus;${money(totals.paid)}</td></tr>
+              <tr><td><b>Remaining to pay</b></td><td class="num"><b>${money(totals.balance)}</b></td></tr>
+            </tbody>
+          </table>
+          <div class="banner banner--warn" style="margin-top:12px">
+            <span class="banner__icon">&#9888;</span>
+            <div>The ${receipts.length} receipts above become <b>void</b> and are shown struck through on the new invoice.
+            One <b>valid consolidated receipt</b> is issued for ${money(totals.paid)}, so the customer keeps proof of payment.</div>
+          </div>`,
+        submitLabel: "Combine &amp; consolidate",
+        danger: true,
+        onSubmit: () => {
+          actions.combineInvoicesWithPayments(jobId);
+        },
+      });
+    },
+
+    receiptModal: (recId) => {
+      const rc = sel.receipt(recId);
+      openModal({
+        title: "Receipt " + rc.no,
+        subtitle:
+          rc.status === "VOID"
+            ? "Void — replaced by a consolidated receipt."
+            : "Proof of payment, not an invoice.",
+        body: `<div class="banner banner--info"><span class="banner__icon">&#8505;</span>
+                 <div><b>${money(rc.amount || 0)}</b> received · paid to date ${money(rc.paidToDate || 0)} · balance ${money(rc.balanceAfter || 0)}</div>
+               </div>
+               <button type="button" class="btn btn--ghost btn--sm" data-act="printReceipt" data-id="${rc.id}">Print / Save as PDF</button>`,
+        submitLabel: "Close",
+        onSubmit: () => {},
+      });
+    },
+
+    printReceipt: (recId) => {
+      const rc = sel.receipt(recId);
+      if (!rc) return;
+      const inv = sel.invoice(rc.invoiceId);
+      const job = sel.job(rc.jobId);
+      const w = global.open("", "_blank", "width=700,height=800");
+      if (!w) {
+        toast("Pop-up blocked — allow pop-ups to print the receipt.", "warn");
+        return;
+      }
+      w.document.write(
+        printablePage(
+          `<header class="d-head"><div><div class="d-garage">${job.garageName}</div>
+             <div class="d-muted">${job.jobNo}</div></div>
+             <div class="d-meta"><div class="d-label">Receipt</div><div class="d-no">${rc.no}</div>
+             <div class="d-muted">${rc.status === "VOID" ? "VOID" : "Issued " + fmtDay(rc.issuedAt)}</div></div></header>
+           <section class="d-parties"><div><div class="d-label">Received from</div><b>${job.customerName}</b></div>
+             <div><div class="d-label">Against</div><b>${inv ? inv.no : "—"}</b></div></section>
+           <section class="d-totals"><table>
+             <tr><td>Amount received</td><td class="num"><b>${money(rc.amount || 0)}</b></td></tr>
+             <tr><td>Method</td><td class="num">${rc.method || "—"}</td></tr>
+             <tr><td>Paid to date</td><td class="num">${money(rc.paidToDate || 0)}</td></tr>
+             <tr class="d-due"><td>Balance after</td><td class="num">${money(rc.balanceAfter || 0)}</td></tr>
+           </table></section>
+           <footer class="d-foot">Emailed to ${rc.emailedTo || "—"} · ${fmtDateTime(rc.issuedAt)}</footer>`,
+          `${rc.no} — ${job.garageName}`,
+        ),
+      );
+      w.document.close();
+      setTimeout(() => {
+        w.focus();
+        w.print();
+      }, 250);
     },
 
     toggleReissue: () => {

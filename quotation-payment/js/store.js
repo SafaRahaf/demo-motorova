@@ -150,6 +150,12 @@
         .sort((a, b) => (a.seq || 1) - (b.seq || 1)),
     receiptsForJob: (jobId) => S.receipts.filter((r) => r.jobId === jobId),
     receiptForInvoice: (invId) => S.receipts.find((r) => r.invoiceId === invId),
+    /* Receipts printed on a document: valid ones first (newest last), then the
+       voided history, so the totals block can show both without ambiguity. */
+    receiptsForInvoice: (invId) =>
+      S.receipts
+        .filter((r) => r.invoiceId === invId)
+        .sort((a, b) => new Date(a.issuedAt) - new Date(b.issuedAt)),
     openProforma: (jobId) =>
       S.invoices
         .filter(
@@ -227,13 +233,10 @@
       if (!p) return 0;
       const inv = sel.invoice(p.invoiceId);
       if (!inv) return 0;
-      const upto = S.payments
-        .filter((x) => x.invoiceId === inv.id)
-        .sort((a, b) => new Date(a.paidAt) - new Date(b.paidAt));
-      const idx = upto.findIndex((x) => x.id === paymentId);
-      const paidSoFar = upto
-        .slice(0, idx + 1)
-        .reduce((s, x) => s + x.amount, 0);
+      const upto = validReceipts(inv.id)
+        .filter((r) => new Date(r.issuedAt) <= new Date(p.paidAt))
+        .sort((a, b) => new Date(a.issuedAt) - new Date(b.issuedAt));
+      const paidSoFar = upto.reduce((s, r) => s + (r.amount || 0), 0);
       const carried = inv.carriedPaid || 0;
       return Math.max(0, inv.total - carried - paidSoFar);
     },
@@ -366,17 +369,23 @@
   /* =========================================================
      INVOICE MATH
      ========================================================= */
-  /* Money actually received against ONE invoice. Invoice-scoped on purpose:
-     a job can legitimately have several live invoices at once, and a job-wide
-     total would show the same money on every one of them. */
+  /*
+     Money received against ONE invoice is derived from its RECEIPTS, not from
+     the payment rows. A receipt is the customer-facing proof of payment, so it
+     is the single source of truth for what has been collected.
+
+     Only VALID receipts count. A VOID receipt stays visible on the document for
+     history (struck through) but is never deducted — otherwise a consolidated
+     invoice would subtract the same money twice.
+  */
+  const validReceipts = (invoiceId) =>
+    S.receipts.filter((r) => r.invoiceId === invoiceId && r.status === "VALID");
+
+  const voidReceipts = (invoiceId) =>
+    S.receipts.filter((r) => r.invoiceId === invoiceId && r.status === "VOID");
+
   const invoicePaid = (invoiceId) =>
-    S.payments
-      .filter(
-        (p) =>
-          p.invoiceId === invoiceId &&
-          ["SUCCEEDED", "PARTIALLY_REFUNDED", "REFUNDED"].includes(p.status),
-      )
-      .reduce((s, p) => s + p.amount, 0);
+    validReceipts(invoiceId).reduce((s, r) => s + (r.amount || 0), 0);
 
   const invoiceRefunded = (invoiceId) =>
     S.refunds
@@ -1053,6 +1062,9 @@
       jobId: "job_3",
       no: "RCP-7003",
       status: "VALID",
+      amount: inv3.depositRequired,
+      method: "CARD",
+      type: "DEPOSIT",
       issuedAt: addDays(t, -4),
       emailedTo: "dana.whitfield@example.com",
       paidToDate: inv3.depositRequired,
@@ -2284,7 +2296,178 @@
       return combined;
     },
 
-    /* ---------- voiding a document ---------- */ /*
+    /*
+       "Combine invoices & payments" — full consolidation.
+       Differs from generateCombinedInvoice() in one decisive way: the money is
+       MOVED onto the new document instead of being carried as a figure.
+
+         · every live invoice is merged and voided
+         · their payments are re-pointed at the new invoice
+         · every earlier receipt is voided (kept, struck through, never deleted)
+         · exactly one VALID receipt is issued showing paid-to-date + balance
+
+       Because the payments now belong to the new invoice, carriedPaid is 0 —
+       otherwise the same money would be deducted twice.
+    */
+    combineInvoicesWithPayments(jobId) {
+      const job = sel.job(jobId);
+      const live = sel
+        .liveInvoices(jobId)
+        .filter((i) => i.kind === "TAX_INVOICE");
+      if (!live.length) {
+        toast("There is no live invoice to consolidate.", "warn");
+        return null;
+      }
+
+      const liveIds = live.map((i) => i.id);
+      /* Receipts to fold in: everything valid on the invoices being replaced. */
+      const receiptsToFold = S.receipts.filter(
+        (r) => liveIds.includes(r.invoiceId) && r.status === "VALID",
+      );
+      if (!receiptsToFold.length) {
+        toast(
+          "There are no payments to consolidate — use 'Combine invoices' instead.",
+          "warn",
+        );
+        return null;
+      }
+      if (live.length === 1 && validReceipts(live[0].id).length < 2) {
+        toast("Nothing to consolidate — one invoice with one receipt.", "warn");
+        return null;
+      }
+
+      /* 1. build the merged document */
+      const lines = [];
+      const quoteIds = [];
+      live.forEach((inv) => {
+        inv.lines.forEach((l) =>
+          lines.push(Object.assign({}, l, { id: uid("ln") })),
+        );
+        if (inv.quoteId) quoteIds.push(inv.quoteId);
+      });
+
+      const versions = sel.invoiceVersions(jobId);
+      const seq = versions.reduce((m, i) => Math.max(m, i.seq || 1), 0) + 1;
+
+      const combined = {
+        id: uid("inv"),
+        jobId,
+        quoteId: live[0].quoteId || null,
+        no: "INV-" + counters.inv++,
+        kind: "TAX_INVOICE",
+        originalInvoiceId: null,
+        settlementQuoteId: null,
+        supersedes: null,
+        supersededBy: null,
+        voidedAt: null,
+        voidReason: null,
+        seq,
+        paymentId: null,
+        /* payments are moved, not carried — so this stays 0 */
+        carriedPaid: 0,
+        combinedFromInvoiceIds: liveIds,
+        isCombined: true,
+        consolidatedReceipts: true,
+        lines,
+        issuedAt: nowISO(),
+        dueAt: addDays(nowISO(), 14),
+        depositRequired: 0,
+        depositType: "NONE",
+        depositValue: 0,
+      };
+      S.invoices.push(combined);
+
+      /* 2. move the payments and their receipts onto the new document */
+      S.payments
+        .filter((p) => liveIds.includes(p.invoiceId))
+        .forEach((p) => {
+          p.migratedFromInvoiceId = p.invoiceId;
+          p.invoiceId = combined.id;
+        });
+      const foldedAmount = receiptsToFold.reduce(
+        (s, r) => s + (r.amount || 0),
+        0,
+      );
+      receiptsToFold.forEach((r) => {
+        r.invoiceId = combined.id;
+      });
+
+      /* 3. compute totals before issuing the consolidated receipt */
+      syncInvoice(combined);
+
+      /* 4. void every earlier receipt — kept for history, never deducted */
+      const consolidated = {
+        id: uid("rec"),
+        paymentId: null,
+        invoiceId: combined.id,
+        jobId,
+        no: "RCP-" + counters.rec++,
+        status: "VALID",
+        amount: foldedAmount,
+        method: "CONSOLIDATED",
+        type: "CONSOLIDATED",
+        issuedAt: nowISO(),
+        emailedTo: job.customerEmail,
+        paidToDate: foldedAmount,
+        balanceAfter: combined.balance,
+        supersededBy: null,
+        voidedAt: null,
+        consolidatedFrom: receiptsToFold.map((r) => r.id),
+      };
+      receiptsToFold.forEach((r) => {
+        r.status = "VOID";
+        r.voidedAt = nowISO();
+        r.voidReason = "Consolidated into " + consolidated.no;
+        r.supersededBy = consolidated.id;
+      });
+      S.receipts.push(consolidated);
+      syncInvoice(combined);
+
+      /* 5. void the source invoices, pointing forward */
+      live.forEach((inv) => {
+        inv.status = "VOID";
+        inv.voidedAt = nowISO();
+        inv.voidReason = "Consolidated into " + combined.no;
+        inv.supersededBy = combined.id;
+        log(
+          jobId,
+          null,
+          "System",
+          "INVOICE_VOIDED",
+          `${inv.no} consolidated into ${combined.no} (with payments).`,
+          inv.total,
+          null,
+        );
+      });
+
+      S.quotes
+        .filter((q) => quoteIds.includes(q.id))
+        .forEach((q) => {
+          q.invoiceIds = [combined.id];
+        });
+
+      log(
+        jobId,
+        null,
+        "Garage",
+        "INVOICE_COMBINED",
+        `${combined.no} consolidates ${live.length} invoice(s) and ${receiptsToFold.length} receipt(s). ` +
+          `${money(foldedAmount)} already paid carried onto this document; consolidated receipt ${consolidated.no} issued. ` +
+          `Total ${money(combined.total)}, remaining ${money(combined.balance)}.`,
+        null,
+        combined.total,
+      );
+
+      toast(
+        `${combined.no} issued — ${receiptsToFold.length} receipts consolidated into ${consolidated.no}.`,
+        "ok",
+      );
+      refresh();
+      return combined;
+    },
+
+    /* ---------- voiding a document ---------- */
+    /*
        Manual void = "this document was wrong from the start".
        Allowed only while nothing has been paid on it. Once money has moved the
        document is not wrong, it is merely out of date — that is what the
@@ -2662,6 +2845,9 @@
         jobId: inv.jobId,
         no: "RCP-" + counters.rec++,
         status: "VALID",
+        amount,
+        method: p.method,
+        type: p.type,
         issuedAt: nowISO(),
         emailedTo: job.customerEmail,
         paidToDate: current.amountPaid,
@@ -2676,6 +2862,12 @@
         r.voidedAt = nowISO();
         r.supersededBy = rc.id;
       });
+
+      /* The receipt is the source of truth for paid-to-date, so re-derive the
+         document now that it exists (and after any receipts were voided). */
+      syncInvoice(current);
+      rc.paidToDate = current.amountPaid;
+      rc.balanceAfter = current.balance;
 
       if (
         job.status === "AWAITING_DEPOSIT" &&
@@ -3093,6 +3285,10 @@
     setLineTax,
     buildLines,
     invoiceNeedsUpdate,
+    invoicePaid,
+    invoiceRefunded,
+    validReceipts,
+    voidReceipts,
     actions,
     seed,
   };

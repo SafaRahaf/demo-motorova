@@ -11,6 +11,7 @@
     money,
     fmtDateTime,
     fmtDay,
+    nowISO,
     quoteTotals,
     depositFor,
     lineTotal,
@@ -753,6 +754,18 @@
     );
     const canCombine = live.filter((i) => i.kind === "TAX_INVOICE").length >= 2;
 
+    /* "Combine with payments" needs money to fold in, plus either a second
+       document or a second receipt — otherwise there is nothing to consolidate. */
+    const receiptCount = live.reduce(
+      (s, i) =>
+        s +
+        sel.receiptsForInvoice(i.id).filter((r) => r.status === "VALID").length,
+      0,
+    );
+    const taxLive = live.filter((i) => i.kind === "TAX_INVOICE");
+    const canCombineWithPayments =
+      receiptCount > 0 && (taxLive.length >= 2 || receiptCount >= 2);
+
     const generateBar = `
       <div class="card">
         <div class="card__head">
@@ -780,8 +793,22 @@
                     "combinedModal",
                     job.id,
                     "btn btn--ghost",
+                    `title="Merge the documents. Payments stay where they are and are shown as carried forward."`,
                   )
                 : `<button type="button" class="btn btn--ghost" disabled title="At least two live invoices are needed">Combine invoices</button>`
+            }
+            ${
+              canCombineWithPayments
+                ? btn(
+                    canCombine
+                      ? `Combine with payments`
+                      : `Consolidate ${receiptCount} receipts`,
+                    "combinedPaymentsModal",
+                    job.id,
+                    "btn btn--ok",
+                    `title="Move the payments onto one invoice and replace the receipts with a single consolidated receipt."`,
+                  )
+                : `<button type="button" class="btn btn--ok" disabled title="Needs payments and more than one document or receipt">Combine with payments</button>`
             }
             <span class="spacer"></span>
             ${
@@ -950,6 +977,151 @@
     </table>`;
   }
 
+  /*
+     Receipt rows printed inside a document's totals block.
+     They are deliberately NOT invoice lines — a receipt is money coming in, not
+     a charge. Only VALID receipts are deducted; voided ones stay visible
+     (struck through) so the history is complete but never counted twice.
+  */
+  function receiptRows(inv) {
+    const list = sel.receiptsForInvoice(inv.id);
+    if (!list.length) return "";
+    const valid = list.filter((r) => r.status === "VALID");
+    return `
+      <div class="rcpt-block">
+        <div class="rcpt-block__head">
+          <span>Receipts</span>
+          <span class="rcpt-block__note">payments received — not charges on this invoice</span>
+        </div>
+        ${
+          valid.length
+            ? valid
+                .map(
+                  (r) => `
+          <button type="button" class="rcpt-row" data-act="receiptModal" data-id="${r.id}" title="Open receipt ${esc(r.no)}">
+            <span class="rcpt-row__no mono">${esc(r.no)}</span>
+            <span class="rcpt-row__meta">${esc(r.method || "")} · ${fmtDay(r.issuedAt)}</span>
+            <span class="rcpt-row__amt">&minus;${money(r.amount || 0)}</span>
+          </button>`,
+                )
+                .join("")
+            : `<div class="rcpt-row rcpt-row--empty"><span class="sub">No valid receipt — see voided below</span></div>`
+        }
+        ${list
+          .filter((r) => r.status === "VOID")
+          .map(
+            (r) => `
+          <button type="button" class="rcpt-row rcpt-row--void" data-act="receiptModal" data-id="${r.id}" title="Void receipt — kept for the audit trail">
+            <span class="rcpt-row__no mono">${esc(r.no)}</span>
+            <span class="rcpt-row__meta">${esc(r.method || "")} · ${fmtDay(r.issuedAt)}</span>
+            <span class="tag">VOID</span>
+            <span class="rcpt-row__amt rcpt-row__amt--void">${money(r.amount || 0)}</span>
+          </button>`,
+          )
+          .join("")}
+      </div>`;
+  }
+
+  /*
+     A standalone, printable document — the SAME markup is used for the screen
+     download and for print-to-PDF, so the two can never drift apart.
+     Contains no app chrome: no tabs, no buttons, no sidebar.
+  */
+  function printableDoc(inv) {
+    const job = sel.job(inv.jobId);
+    const isVoid = inv.status === "VOID";
+    const isProforma = inv.kind === "PROFORMA";
+    const isWarranty = inv.kind === "WARRANTY";
+    const label = isProforma
+      ? "Proforma invoice"
+      : isWarranty
+        ? "Warranty invoice"
+        : "Tax invoice";
+    const receipts = sel.receiptsForInvoice(inv.id);
+    const valid = receipts.filter((r) => r.status === "VALID");
+
+    const lineRows = (inv.lines || [])
+      .map(
+        (l) => `<tr>
+          <td>${esc(l.description)}${l.isAddon ? ' <span class="d-tag">Add-on</span>' : ""}${l.taxCode ? ` <span class="d-tag d-tag--tax">${esc(l.taxCode)}</span>` : ""}</td>
+          <td class="num">${l.qty}</td>
+          <td class="num">${money(l.unitPrice)}</td>
+          <td class="num">${money(lineTotal(l))}</td>
+        </tr>`,
+      )
+      .join("");
+
+    const taxRows = (inv.taxes || [])
+      .map(
+        (t) => `<tr>
+          <td class="d-muted">${esc(t.code)} ${t.kind === "PERCENT" ? (t.value / 100).toFixed(2) + "%" : money(t.value) + "/unit"}${t.inclusive ? " (included)" : ""}</td>
+          <td class="num">${money(t.amount)}</td>
+        </tr>`,
+      )
+      .join("");
+
+    return `
+      ${isVoid ? '<div class="d-void-mark">VOID — NOT PAYABLE</div>' : ""}
+      <header class="d-head">
+        <div>
+          <div class="d-garage">${esc(job.garageName)}</div>
+          <div class="d-muted">${esc(job.jobNo)} · ${esc(job.vehicle.year + " " + job.vehicle.make + " " + job.vehicle.model)} · ${esc(job.vehicle.plate)}</div>
+        </div>
+        <div class="d-meta">
+          <div class="d-label">${esc(label)}</div>
+          <div class="d-no">${esc(inv.no)}</div>
+          <div class="d-muted">${isVoid ? "Voided " + fmtDay(inv.voidedAt) : "Issued " + fmtDay(inv.issuedAt)}</div>
+          <div class="d-muted">${isVoid ? esc(inv.voidReason || "") : "Due " + fmtDay(inv.dueAt)}</div>
+        </div>
+      </header>
+
+      <section class="d-parties">
+        <div>
+          <div class="d-label">Billed to</div>
+          <div><b>${esc(job.customerName)}</b></div>
+          <div class="d-muted">${esc(job.customerEmail || "")}</div>
+        </div>
+        <div>
+          <div class="d-label">Vehicle</div>
+          <div><b>${esc(job.vehicle.year + " " + job.vehicle.make + " " + job.vehicle.model)}</b></div>
+          <div class="d-muted">${esc(job.vehicle.plate)} · VIN ${esc(job.vehicle.vin)}</div>
+        </div>
+      </section>
+
+      <table class="d-table">
+        <thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Unit</th><th class="num">Amount</th></tr></thead>
+        <tbody>${lineRows}</tbody>
+      </table>
+
+      <section class="d-totals">
+        <table>
+          <tr><td>Subtotal (excl. tax)</td><td class="num">${money(inv.subtotal)}</td></tr>
+          ${taxRows}
+          <tr class="d-major"><td>Total</td><td class="num">${money(inv.total)}</td></tr>
+          ${inv.carriedPaid > 0 ? `<tr><td>Paid on consolidated invoices</td><td class="num">&minus;${money(inv.carriedPaid)}</td></tr>` : ""}
+          ${valid.length ? `<tr><td colspan="2" class="d-section">Receipts — payments received, not charges</td></tr>` : ""}
+          ${valid.map((r) => `<tr><td class="d-muted">${esc(r.no)} · ${esc(r.method || "")} · ${fmtDay(r.issuedAt)}</td><td class="num">&minus;${money(r.amount || 0)}</td></tr>`).join("")}
+          ${inv.refunded > 0 ? `<tr><td>Refunded</td><td class="num">${money(inv.refunded)}</td></tr>` : ""}
+          <tr class="d-due"><td>Remaining balance</td><td class="num">${money(inv.balance)}</td></tr>
+        </table>
+      </section>
+
+      ${
+        receipts.filter((r) => r.status === "VOID").length
+          ? `<section class="d-note"><b>Void receipts (kept for the audit trail):</b>
+             ${receipts
+               .filter((r) => r.status === "VOID")
+               .map((r) => `${esc(r.no)} ${money(r.amount || 0)}`)
+               .join(" · ")}</section>`
+          : ""
+      }
+
+      ${isProforma ? '<section class="d-note"><b>Proforma — not a tax invoice.</b> No payment is due against this document.</section>' : ""}
+      ${isVoid ? '<section class="d-note"><b>This document has been voided.</b> It is kept for the record only and is not payable.</section>' : ""}
+
+      <footer class="d-foot">${esc(job.garageName)} · ${esc(job.jobNo)} · Generated ${fmtDateTime(nowISO())}</footer>`;
+  }
+
   function invoiceDoc(job, inv) {
     const label = S.role === "customer" ? "Bill" : "Invoice";
     const credits = sel.creditNotesForInvoice(inv.id);
@@ -1018,12 +1190,12 @@
               ${taxBlock(inv.taxes)}
               <div class="totals__row totals__row--major"><span>Total</span><span>${money(inv.total)}</span></div>
               ${inv.carriedPaid > 0 ? `<div class="totals__row totals__row--carried"><span>Paid on consolidated invoices <span class="sub">(${(inv.combinedFromInvoiceIds || []).length} documents)</span></span><span>&minus;${money(inv.carriedPaid)}</span></div>` : ""}
-              ${inv.carriedPaid > 0 && inv.amountPaid - inv.carriedPaid > 0 ? `<div class="totals__row totals__row--paid"><span>Paid on this invoice</span><span>&minus;${money(inv.amountPaid - inv.carriedPaid)}</span></div>` : inv.carriedPaid === 0 ? `<div class="totals__row totals__row--paid"><span>Paid to date</span><span>&minus;${money(inv.amountPaid)}</span></div>` : ""}
               ${inv.refunded > 0 ? `<div class="totals__row"><span>Refunded</span><span>${money(inv.refunded)}</span></div>` : ""}
               <div class="totals__row totals__row--due ${inv.balance === 0 ? "is-zero" : "is-due"}">
                 <span>Remaining balance</span><span>${money(inv.balance)}</span>
               </div>
             </div>
+            ${receiptRows(inv)}
           </div>
 
           ${
@@ -1049,6 +1221,7 @@
               : `<span class="turn-hint">${inv.kind === "TAX_INVOICE" ? "Settled in full." : "Zero-dollar warranty document."}</span>`
           }
           ${stale && S.role === "garage" ? btn("Generate invoice for new work", "generateInvoices", job.id, "btn btn--primary") : ""}
+          ${btn("Download", "downloadDoc", inv.id, "btn btn--ghost btn--sm", `title="Print to PDF or download a standalone copy"`)}
           ${
             inv.kind === "TAX_INVOICE" &&
             inv.amountPaid === 0 &&
@@ -1806,5 +1979,5 @@
     renderMain();
   }
 
-  global.Views = { render };
+  global.Views = { render, printableDoc };
 })(window);
